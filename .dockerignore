@@ -1,0 +1,5 @@
+.git
+build
+app/.dart_tool
+app/build
+**/.dart_tool
