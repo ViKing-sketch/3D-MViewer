@@ -4,7 +4,7 @@
 
 Нормативные документы:
 
-* [Техническое задание v0.1](docs/TZ_Field_BIM_Viewer_v0_1.md)
+* [Техническое задание v0.2](docs/TZ_Field_BIM_Viewer_v0_2.md)
 * [Формат пакета format_version 1](docs/package_format.md)
 * [Принятые решения и статус M0](docs/decisions.md)
 * [План Filament](docs/rendering.md)
