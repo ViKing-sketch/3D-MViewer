@@ -1,0 +1,62 @@
+name: CI
+
+# pull_request covers branch updates that already have a PR.
+# push is limited to main so a branch push does not also start a second run.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compilers
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ clang-format
+      - name: Configure
+        run: cmake --preset linux-gcc
+      - name: Build
+        run: cmake --build --preset linux-gcc
+      - name: Test
+        run: ctest --preset linux-gcc --output-on-failure
+      - name: clang-format
+        run: |
+          git ls-files '*.cpp' '*.h' '*.hpp' '*.c' \
+            | grep -E '^(core|converter)/' \
+            | xargs clang-format --dry-run --Werror
+
+  windows:
+    # windows-latest is the VS 2026 image and does not provide the
+    # "Visual Studio 17 2022" generator used by the windows-msvc preset.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset windows-msvc
+      - name: Build
+        run: cmake --build --preset windows-msvc --config Release
+      - name: Test
+        run: ctest --preset windows-msvc --output-on-failure -C Release
+
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libsqlite3-0
+      - name: Build fbv_core
+        run: |
+          cmake --preset linux-gcc
+          cmake --build --preset linux-gcc --target fbv_core
+      - name: Flutter analyze and test
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+          FBV_CORE_LIB="$GITHUB_WORKSPACE/build/linux-gcc/core/libfbv_core.so" flutter test

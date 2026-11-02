@@ -1,0 +1,87 @@
+{
+  "format_version": 1,
+  "generator": "fbvconv 0.1.0",
+  "created_utc": "2026-10-31T10:46:54Z",
+  "name": "Sample Project",
+  "source": {
+    "filename": "sample_wall.ifc",
+    "schema": "IFC4",
+    "sha256": "ffb7ff4e9386e79838d1b3ca76685d36b0dab5d64d2b96edcef2723b3b09b4a6"
+  },
+  "units": {
+    "length": "metre",
+    "source_length_unit": "millimetre",
+    "area": "square_metre",
+    "volume": "cubic_metre",
+    "ui_length": "millimetre"
+  },
+  "local_origin": [
+    9997,
+    19998,
+    -0.2
+  ],
+  "world_bbox": {
+    "min": [
+      9997,
+      19998,
+      -0.2
+    ],
+    "max": [
+      10003,
+      20002,
+      3
+    ]
+  },
+  "counts": {
+    "spatial": 4,
+    "elements": 4,
+    "elements_with_mesh": 3,
+    "elements_without_geometry": 1,
+    "triangles_lod0": 36,
+    "warnings": 1
+  },
+  "mesh": {
+    "generator": "analytic-extrusion-v1",
+    "linear_deflection_m": 0.01,
+    "angular_deflection_rad": 0.5,
+    "lods": [
+      "lod0"
+    ],
+    "instancing": false,
+    "coordinate_space": "local_origin_metres_float32"
+  },
+  "brep": {
+    "codec": "analytic-box-v1",
+    "coordinate_space": "world_metres_float64"
+  },
+  "parts": {
+    "brep.index": {
+      "sha256": "8fc3299e18ec75ea44b1e0a41d25f495d9ebe634e0ef0e7dd427cc9ff4f3c37d",
+      "bytes": 384
+    },
+    "brep.pack": {
+      "sha256": "2675a5293258b3bde569069d81ab59caca39c281d3524f10c2f802215384cfdd",
+      "bytes": 168
+    },
+    "mesh/elements/1.glb": {
+      "sha256": "2ae7a5b40daa4795e5892cf47a47c7ccc19e4a65aed51921ae73904097e155fd",
+      "bytes": 2048
+    },
+    "mesh/elements/2.glb": {
+      "sha256": "ec37a8ebf60f9b30926aed28d4dff1b2269b87753dbb6c80f28fc352d909a4ae",
+      "bytes": 2080
+    },
+    "mesh/elements/3.glb": {
+      "sha256": "1e0147f2e9025d6f22431da1ef0f5ba37e113641c5a902d838c9d2a27db478c5",
+      "bytes": 2000
+    },
+    "mesh/lod0.glb": {
+      "sha256": "871de2173a5a7205bf597df1541dd120ef5291491aaacd1bac5e2d301a9cb362",
+      "bytes": 5644
+    },
+    "meta.sqlite": {
+      "sha256": "7099628847c70832d0026ad5f2d43f64d98ee8c4f811a90ca3d00726d8831db0",
+      "bytes": 131072
+    }
+  }
+}
