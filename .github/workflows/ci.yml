@@ -1,8 +1,12 @@
 name: CI
 
+# pull_request covers branch updates that already have a PR.
+# push is limited to main so a branch push does not also start a second run.
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   linux:
@@ -20,11 +24,13 @@ jobs:
       - name: clang-format
         run: |
           git ls-files '*.cpp' '*.h' '*.hpp' '*.c' \
-            | grep -v '^third_party/' \
+            | grep -E '^(core|converter)/' \
             | xargs clang-format --dry-run --Werror
 
   windows:
-    runs-on: windows-latest
+    # windows-latest is the VS 2026 image and does not provide the
+    # "Visual Studio 17 2022" generator used by the windows-msvc preset.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - name: Configure

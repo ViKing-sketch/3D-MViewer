@@ -62,6 +62,8 @@ build\windows-msvc\converter\Release\pkg_validate.exe %TEMP%\sample.fbvpkg
 
 Исходники собираются с `/utf-8`.
 
+CI гоняет этот пресет на образе `windows-2022`. Образ `windows-latest` содержит только Visual Studio 2026, и генератор «Visual Studio 17 2022» на нём не находится.
+
 ## Windows — MSYS2 / MinGW
 
 В среде UCRT64 (или MINGW64):
