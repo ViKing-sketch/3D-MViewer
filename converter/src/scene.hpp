@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fbv/convert.hpp"
 #include "ifc_parse.hpp"
 #include "math.hpp"
 
@@ -82,6 +83,9 @@ struct Element {
   std::vector<ClassifValue> classes;
   TriMesh mesh;
   bool has_mesh = false;
+  bool has_representation = false;
+  std::string mesh_source;
+  std::string geometry_failure;
   bool has_bbox = false;
   double bbox_min[3]{};
   double bbox_max[3]{};
@@ -101,12 +105,26 @@ struct Scene {
   std::vector<TypeInfo> types;
   std::vector<Element> elements;
   std::vector<std::string> warnings;
+  std::vector<std::string> notes;
+  std::vector<std::string> missing_guids;
   bool has_world = false;
   double world_min[3]{};
   double world_max[3]{};
   Vec3 origin;
+  std::string mesh_generator = "analytic-extrusion-v1";
+  std::string geometry_library = "analytic";
+  std::string ifc_log;
+  bool ifcopenshell_ran = false;
+  bool ios_unavailable = false;
+  bool completeness_ok = true;
+  int failed = 0;
+  int without_geometry = 0;
+  int excluded = 0;
+  int triangles = 0;
+  int threads = 1;
+  double geometry_seconds = 0;
 };
 
-Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_filter);
+Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std::string& ifc_text);
 
 }  // namespace fbv

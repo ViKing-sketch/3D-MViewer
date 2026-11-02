@@ -101,7 +101,9 @@ int main() {
   CHECK(status.code == 0);
   CHECK(status.elements == 4);
   CHECK(status.with_mesh == 3);
+  CHECK(status.failed == 0);
   CHECK(status.warnings >= 1);
+  CHECK(status.completeness_ok);
 
   char err[512] = {};
   fbv_package* package = fbv_package_open(directory.string().c_str(), err, sizeof(err));
@@ -217,7 +219,12 @@ int main() {
     CHECK(fbv::read_glb(directory / "mesh" / "elements" / "1.glb", wall_glb, glb_error));
     std::vector<float> xyz;
     CHECK(fbv::glb_positions(wall_glb, xyz, glb_error));
-    CHECK(xyz.size() == 36 * 3);  // 12 triangles, unshared vertices
+    const std::string manifest_text = fbv::read_text((directory / "manifest.json").string());
+    const bool ios_mesh = manifest_text.find("ifcopenshell-occt") != std::string::npos;
+    if (!ios_mesh)
+      CHECK(xyz.size() == 36 * 3);  // 12 triangles, unshared vertices
+    else
+      CHECK(xyz.size() >= 8 * 3);
     float gmin[3] = {};
     float gmax[3] = {};
     bounds(xyz, gmin, gmax);
@@ -323,7 +330,15 @@ END-ISO-10303-21;
                       prism_glb, prism_error));
   std::vector<float> prism_xyz;
   CHECK(fbv::glb_positions(prism_glb, prism_xyz, prism_error));
-  CHECK(prism_xyz.size() == 24 * 3);
+  {
+    const std::string prism_manifest =
+        fbv::read_text((std::filesystem::path(prism_options.output) / "manifest.json").string());
+    const bool ios_mesh = prism_manifest.find("ifcopenshell-occt") != std::string::npos;
+    if (!ios_mesh)
+      CHECK(prism_xyz.size() == 24 * 3);
+    else
+      CHECK(prism_xyz.size() >= 4 * 3);
+  }
   float pmin[3] = {};
   float pmax[3] = {};
   bounds(prism_xyz, pmin, pmax);
@@ -340,12 +355,21 @@ END-ISO-10303-21;
   const char* validator = std::getenv("FBV_PKG_VALIDATE");
   if (fbvconv != nullptr && validator != nullptr) {
     const auto cli_out = root / "cli.fbvpkg";
+    const auto cli_json = root / "cli.json";
     const std::string cmd = std::string("\"") + fbvconv + "\" \"" +
                             (testdata / "sample_wall.ifc").string() + "\" -o \"" +
-                            cli_out.string() + "\"";
+                            cli_out.string() + "\" --stats --json \"" + cli_json.string() + "\"";
     const int cli_rc = run_cli(cmd);
     if (cli_rc != 0) std::cerr << "cli exit " << cli_rc << ": " << cmd << "\n";
     CHECK(cli_rc == 0);
+    CHECK(std::filesystem::is_regular_file(cli_json));
+    if (std::filesystem::is_regular_file(cli_json)) {
+      const std::string summary = fbv::read_text(cli_json.string());
+      CHECK(summary.find("\"with_mesh\"") != std::string::npos);
+      CHECK(summary.find("\"peak_rss_bytes\"") != std::string::npos);
+      CHECK(summary.find("\"timings_s\"") != std::string::npos);
+      CHECK(summary.find("\"completeness\": \"ok\"") != std::string::npos);
+    }
     const std::string validate_cmd =
         std::string("\"") + validator + "\" \"" + cli_out.string() + "\"";
     const int validate_rc = run_cli(validate_cmd);
@@ -353,6 +377,58 @@ END-ISO-10303-21;
       std::cerr << "validate exit " << validate_rc << ": " << validate_cmd << "\n";
     CHECK(validate_rc == 0);
   }
+
+  {
+    fbv::ConvertOptions poly_options;
+    poly_options.output = (root / "polyline").string();
+    poly_options.as_directory = true;
+    const auto poly = fbv::convert_file((testdata / "polyline_ifc2x3.ifc").string(), poly_options);
+    if (poly.code != 0) std::cerr << poly.error << "\n";
+    CHECK(poly.code == 0);
+    CHECK(poly.elements == 1);
+    CHECK(poly.with_mesh == 1);
+    CHECK(poly.failed == 0);
+  }
+
+  auto expect_solid = [&](const char* filename, const char* label, double min_x, double max_x) {
+    fbv::ConvertOptions solid_options;
+    solid_options.output = (root / label).string();
+    solid_options.as_directory = true;
+    solid_options.source_name = filename;
+    const auto solid = fbv::convert_file((testdata / filename).string(), solid_options);
+    if (solid.code != 0) std::cerr << solid.error << "\n";
+    CHECK(solid.code == 0);
+    CHECK(solid.elements == 1);
+    CHECK(solid.completeness_ok);
+    const std::string manifest =
+        fbv::read_text((std::filesystem::path(solid_options.output) / "manifest.json").string());
+    const bool ios_mesh = manifest.find("ifcopenshell-occt") != std::string::npos;
+    if (ios_mesh) {
+      CHECK(solid.with_mesh == 1);
+      CHECK(solid.failed == 0);
+      char open_err[512] = {};
+      fbv_package* solid_pkg =
+          fbv_package_open(solid_options.output.c_str(), open_err, sizeof(open_err));
+      CHECK(solid_pkg != nullptr);
+      if (solid_pkg != nullptr) {
+        fbv_element_info solid_info{};
+        CHECK(fbv_element_by_id(solid_pkg, 1, &solid_info) == FBV_OK);
+        CHECK(solid_info.mesh_node >= 0);
+        CHECK(near(solid_info.bbox_min[0], min_x, 1e-3));
+        CHECK(near(solid_info.bbox_max[0], max_x, 1e-3));
+        CHECK(near(solid_info.bbox_min[1], 0, 1e-3) && near(solid_info.bbox_min[2], 0, 1e-3));
+        CHECK(near(solid_info.bbox_max[1], 1, 1e-3) && near(solid_info.bbox_max[2], 1, 1e-3));
+        fbv_package_close(solid_pkg);
+      }
+    } else {
+      CHECK(solid.with_mesh == 0);
+      CHECK(solid.failed == 1);
+    }
+    std::string solid_report;
+    CHECK(fbv::validate_package(solid_options.output, solid_report) == 0);
+  };
+  expect_solid("brep_box.ifc", "brep_box", 0, 1);
+  expect_solid("mapped_box.ifc", "mapped_box", 2, 3);
 
   if (g_failed != 0) {
     std::cerr << g_failed << " converter checks failed\n";

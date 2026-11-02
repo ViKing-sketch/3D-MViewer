@@ -9,17 +9,17 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(FBV_BUILD_TESTS "Build unit tests" ON)
-option(FBV_WITH_OCCT "Link Open CASCADE 7.8.1 (not used by the analytic MVP)" OFF)
-option(FBV_WITH_IFCOPENSHELL "Link IfcOpenShell (not used by the analytic MVP)" OFF)
+option(FBV_WITH_OCCT "Build Open CASCADE 7.8.1 (turns on IfcOpenShell)" OFF)
+option(FBV_WITH_IFCOPENSHELL "Mesh IFC with IfcOpenShell's Open CASCADE kernel" OFF)
+set(FBV_SUPERBUILD_JOBS "" CACHE STRING
+    "Parallel compile jobs for the Open CASCADE superbuild (empty = all cores)")
 
 if(FBV_BUILD_TESTS)
   enable_testing()
 endif()
 
-if(FBV_WITH_OCCT OR FBV_WITH_IFCOPENSHELL)
-  message(FATAL_ERROR
-    "FBV_WITH_OCCT and FBV_WITH_IFCOPENSHELL are reserved for the OCCT/IfcOpenShell superbuild. "
-    "The host MVP converter does not link them yet. See deps/CMakeLists.txt.")
+if(FBV_WITH_OCCT AND NOT FBV_WITH_IFCOPENSHELL)
+  set(FBV_WITH_IFCOPENSHELL ON)
 endif()
 
 function(fbv_warnings target)

@@ -40,6 +40,46 @@ jobs:
       - name: Test
         run: ctest --preset windows-msvc --output-on-failure -C Release
 
+  linux-ifcopenshell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compilers and Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ \
+            libboost-system-dev libboost-program-options-dev libboost-regex-dev \
+            libboost-thread-dev libboost-date-time-dev libboost-iostreams-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libeigen3-dev
+      - name: Configure
+        run: cmake --preset linux-gcc-ifcopenshell
+      - name: Build
+        run: cmake --build --preset linux-gcc-ifcopenshell
+      - name: Test
+        run: ctest --preset linux-gcc-ifcopenshell --output-on-failure
+
+  windows-ifcopenshell:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Boost
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_ROOT
+          if (-not $root) { $root = $env:VCPKG_INSTALLATION_ROOT }
+          if (-not $root) { $root = "C:\vcpkg" }
+          & "$root\vcpkg.exe" install boost-system:x64-windows boost-program-options:x64-windows boost-regex:x64-windows boost-thread:x64-windows boost-date-time:x64-windows boost-iostreams:x64-windows eigen3:x64-windows
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-msvc-ifcopenshell "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+      - name: Build
+        run: cmake --build --preset windows-msvc-ifcopenshell --config Release
+      - name: Test
+        run: ctest --preset windows-msvc-ifcopenshell --output-on-failure -C Release
+
   flutter:
     runs-on: ubuntu-latest
     steps:

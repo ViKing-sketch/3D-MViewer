@@ -19,11 +19,18 @@ void print_usage() {
       << "  --directory                  записать каталог пакета, а не ZIP\n"
       << "  --no-brep                    не писать brep.pack / brep.index\n"
       << "  --class <IfcWall,IfcSlab>    оставить только перечисленные классы\n"
-      << "  --linear-deflection <м>      допуск триангуляции (записывается в manifest)\n"
-      << "  --angular-deflection <рад>   угловой допуск (записывается в manifest)\n"
-      << "  --lod <n>                    запрошенное число LOD; аналитический мешер пишет lod0\n"
+      << "  --linear-deflection <м>      допуск триангуляции OCCT (в manifest)\n"
+      << "  --angular-deflection <рад>   угловой допуск OCCT (в manifest)\n"
+      << "  --lod <n>                    запрошенное число LOD; пишется lod0\n"
+      << "  --mesher <auto|ifcopenshell|analytic>\n"
+      << "                               auto — IfcOpenShell, если собран, иначе аналитический\n"
+      << "  --threads <n>                потоки итератора геометрии (0 = по ядрам, минимум 2)\n"
+      << "  --allow-incomplete           записать пакет, даже если элемент исходника потерян\n"
+      << "  --stats                      сводка: тайминги, пик RSS, треугольники, размер пакета\n"
+      << "  --json <file|->              та же сводка в JSON ( - — на stdout)\n"
       << "  --validate <пакет>           проверить пакет (код 0 или 3)\n"
       << "\n"
+      << "Код 0 — пакет записан, 2 — ошибка конвертации, 4 — пакет неполон (FR-C-16).\n"
       << "STEP/IGES в этой сборке не импортируются: нужен OCCT XDE (задача Z06).\n";
 }
 
@@ -89,6 +96,20 @@ int main(int argc, char** argv) {
         options.angular_deflection_rad = std::stod(need(arg.c_str()));
       } else if (arg == "--lod") {
         options.lod = std::stoi(need(arg.c_str()));
+      } else if (arg == "--mesher") {
+        options.mesher = need(arg.c_str());
+        if (options.mesher != "auto" && options.mesher != "ifcopenshell" &&
+            options.mesher != "analytic") {
+          throw std::runtime_error("mesher должен быть auto, ifcopenshell или analytic");
+        }
+      } else if (arg == "--threads") {
+        options.threads = std::stoi(need(arg.c_str()));
+      } else if (arg == "--allow-incomplete") {
+        options.allow_incomplete = true;
+      } else if (arg == "--stats") {
+        options.stats = true;
+      } else if (arg == "--json") {
+        options.json_output = need(arg.c_str());
       } else if (!arg.empty() && arg[0] == '-') {
         print_usage();
         return 1;
@@ -108,13 +129,31 @@ int main(int argc, char** argv) {
     return 1;
   }
   const fbv::ConvertStatus status = fbv::convert_file(input, options);
+  const bool json_stdout = options.json_output == "-";
+  std::ostream& human = json_stdout ? std::cerr : std::cout;
+  if (json_stdout && !status.json_body.empty()) std::cout << status.json_body;
   if (status.code != 0) {
     std::cerr << status.error << "\n";
     return status.code;
   }
-  std::cout << "elements: " << status.elements << "\n"
-            << "with_mesh: " << status.with_mesh << "\n"
-            << "warnings: " << status.warnings << "\n"
-            << "output: " << options.output << "\n";
+  human << "elements: " << status.elements << "\n"
+        << "with_mesh: " << status.with_mesh << "\n"
+        << "failed: " << status.failed << "\n"
+        << "warnings: " << status.warnings << "\n"
+        << "completeness: " << (status.completeness_ok ? "ok" : "incomplete") << "\n"
+        << "output: " << options.output << "\n";
+  if (options.stats) {
+    const double rss_mb = static_cast<double>(status.peak_rss_bytes) / (1024.0 * 1024.0);
+    const double pkg_mb = static_cast<double>(status.package_bytes) / (1024.0 * 1024.0);
+    human << "triangles: " << status.triangles << "\n"
+          << "mesher: " << status.mesher << "\n"
+          << "threads: " << status.threads << "\n"
+          << "peak_rss_mb: " << rss_mb << "\n"
+          << "package_mb: " << pkg_mb << "\n"
+          << "parse_s: " << status.parse_seconds << "\n"
+          << "geometry_s: " << status.geometry_seconds << "\n"
+          << "write_s: " << status.write_seconds << "\n"
+          << "total_s: " << status.total_seconds << "\n";
+  }
   return 0;
 }

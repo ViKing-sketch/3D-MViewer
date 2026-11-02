@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <map>
 #include <sstream>
 #include <tuple>
@@ -47,11 +48,6 @@ void append_f64(std::vector<std::uint8_t>& out, double value) {
   append_u64(out, bits);
 }
 
-void append_bytes(std::vector<std::uint8_t>& out, const void* data, std::size_t size) {
-  const auto* bytes = static_cast<const std::uint8_t*>(data);
-  out.insert(out.end(), bytes, bytes + size);
-}
-
 std::string utc_now() {
   const std::time_t now = std::time(nullptr);
   std::tm tm{};
@@ -76,28 +72,72 @@ struct GlbRange {
   const Element* element = nullptr;
 };
 
-std::vector<std::uint8_t> build_glb(const std::vector<const Element*>& elements) {
-  std::vector<float> positions;
-  std::vector<float> normals;
-  std::vector<std::uint32_t> indices;
+void write_as_floats(std::ostream& out, const std::vector<double>& values) {
+  std::vector<float> chunk;
+  chunk.reserve(4096);
+  for (std::size_t i = 0; i < values.size();) {
+    chunk.clear();
+    const std::size_t n = std::min<std::size_t>(4096, values.size() - i);
+    for (std::size_t k = 0; k < n; ++k) chunk.push_back(static_cast<float>(values[i + k]));
+    out.write(reinterpret_cast<const char*>(chunk.data()),
+              static_cast<std::streamsize>(chunk.size() * sizeof(float)));
+    i += n;
+  }
+}
+
+void append_file(std::ostream& out, const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw std::runtime_error("cannot read " + path.string());
+  out << in.rdbuf();
+}
+
+// BIN payload is written to scratch files and copied into the GLB so the triangle
+// buffer is not held twice. release drops each element's mesh after it is copied.
+void write_glb_file(const std::filesystem::path& path, const std::vector<Element*>& elements,
+                    bool release) {
+  std::vector<Element*> live;
+  for (Element* element : elements) {
+    if (element != nullptr && element->has_mesh && !element->mesh.indices.empty())
+      live.push_back(element);
+  }
+  const auto scratch_dir =
+      path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
+  const auto pos_path = scratch_dir / (path.filename().string() + ".pos");
+  const auto nrm_path = scratch_dir / (path.filename().string() + ".nrm");
+  const auto idx_path = scratch_dir / (path.filename().string() + ".idx");
+  struct Scratch {
+    std::filesystem::path pos, nrm, idx;
+    ~Scratch() {
+      std::error_code ec;
+      std::filesystem::remove(pos, ec);
+      std::filesystem::remove(nrm, ec);
+      std::filesystem::remove(idx, ec);
+    }
+  } scratch{pos_path, nrm_path, idx_path};
+
+  std::ofstream pos_out(pos_path, std::ios::binary | std::ios::trunc);
+  std::ofstream nrm_out(nrm_path, std::ios::binary | std::ios::trunc);
+  std::ofstream idx_out(idx_path, std::ios::binary | std::ios::trunc);
+  if (!pos_out || !nrm_out || !idx_out)
+    throw std::runtime_error("cannot create mesh scratch files");
+
   std::vector<GlbRange> ranges;
-  for (const Element* element : elements) {
-    if (element == nullptr || !element->has_mesh) continue;
+  std::uint32_t vertex_cursor = 0;
+  std::uint32_t normal_cursor = 0;
+  std::uint32_t index_cursor = 0;
+  for (Element* element : live) {
     GlbRange range;
     range.element = element;
-    range.pos_offset = static_cast<std::uint32_t>(positions.size() / 3);
+    range.pos_offset = vertex_cursor;
     range.pos_count = static_cast<std::uint32_t>(element->mesh.position.size() / 3);
-    range.normal_offset = static_cast<std::uint32_t>(normals.size() / 3);
-    range.index_offset = static_cast<std::uint32_t>(indices.size());
+    range.normal_offset = normal_cursor;
+    range.index_offset = index_cursor;
     range.index_count = static_cast<std::uint32_t>(element->mesh.indices.size());
     bool init = false;
     for (std::size_t i = 0; i + 2 < element->mesh.position.size(); i += 3) {
       const float x = static_cast<float>(element->mesh.position[i]);
       const float y = static_cast<float>(element->mesh.position[i + 1]);
       const float z = static_cast<float>(element->mesh.position[i + 2]);
-      positions.push_back(x);
-      positions.push_back(y);
-      positions.push_back(z);
       if (!init) {
         range.min_v[0] = range.max_v[0] = x;
         range.min_v[1] = range.max_v[1] = y;
@@ -112,18 +152,34 @@ std::vector<std::uint8_t> build_glb(const std::vector<const Element*>& elements)
         range.max_v[2] = std::max(range.max_v[2], z);
       }
     }
-    for (double value : element->mesh.normal) normals.push_back(static_cast<float>(value));
-    for (std::uint32_t index : element->mesh.indices) indices.push_back(index);
+    write_as_floats(pos_out, element->mesh.position);
+    write_as_floats(nrm_out, element->mesh.normal);
+    if (!element->mesh.indices.empty()) {
+      idx_out.write(
+          reinterpret_cast<const char*>(element->mesh.indices.data()),
+          static_cast<std::streamsize>(element->mesh.indices.size() * sizeof(std::uint32_t)));
+    }
+    vertex_cursor += range.pos_count;
+    normal_cursor += static_cast<std::uint32_t>(element->mesh.normal.size() / 3);
+    index_cursor += range.index_count;
     ranges.push_back(range);
+    if (release) {
+      element->mesh.position.clear();
+      element->mesh.position.shrink_to_fit();
+      element->mesh.normal.clear();
+      element->mesh.normal.shrink_to_fit();
+      element->mesh.indices.clear();
+      element->mesh.indices.shrink_to_fit();
+    }
   }
+  pos_out.close();
+  nrm_out.close();
+  idx_out.close();
 
-  std::vector<std::uint8_t> bin;
-  const auto pos_bytes = static_cast<std::uint32_t>(positions.size() * sizeof(float));
-  const auto nrm_bytes = static_cast<std::uint32_t>(normals.size() * sizeof(float));
-  const auto idx_bytes = static_cast<std::uint32_t>(indices.size() * sizeof(std::uint32_t));
-  append_bytes(bin, positions.data(), pos_bytes);
-  append_bytes(bin, normals.data(), nrm_bytes);
-  append_bytes(bin, indices.data(), idx_bytes);
+  const auto pos_bytes = static_cast<std::uint32_t>(std::filesystem::file_size(pos_path));
+  const auto nrm_bytes = static_cast<std::uint32_t>(std::filesystem::file_size(nrm_path));
+  const auto idx_bytes = static_cast<std::uint32_t>(std::filesystem::file_size(idx_path));
+  const auto bin_bytes = pos_bytes + nrm_bytes + idx_bytes;
 
   Json root = Json::object();
   Json asset = Json::object();
@@ -248,27 +304,39 @@ std::vector<std::uint8_t> build_glb(const std::vector<const Element*>& elements)
     root.set("bufferViews", std::move(views));
     Json buffers = Json::array();
     Json buffer = Json::object();
-    buffer.set("byteLength", Json::integer(static_cast<std::int64_t>(bin.size())));
+    buffer.set("byteLength", Json::integer(bin_bytes));
     buffers.push(std::move(buffer));
     root.set("buffers", std::move(buffers));
   }
 
   std::string json = root.dump(0);
   while (json.size() % 4 != 0) json.push_back(' ');
-  while (bin.size() % 4 != 0) bin.push_back(0);
-  const std::uint32_t total = 12u + 8u + static_cast<std::uint32_t>(json.size()) + 8u +
-                              static_cast<std::uint32_t>(bin.size());
-  std::vector<std::uint8_t> glb;
-  append_u32(glb, 0x46546C67u);
-  append_u32(glb, 2u);
-  append_u32(glb, total);
-  append_u32(glb, static_cast<std::uint32_t>(json.size()));
-  append_u32(glb, 0x4E4F534Au);
-  append_bytes(glb, json.data(), json.size());
-  append_u32(glb, static_cast<std::uint32_t>(bin.size()));
-  append_u32(glb, 0x004E4942u);
-  append_bytes(glb, bin.data(), bin.size());
-  return glb;
+  const std::uint32_t bin_padded = (bin_bytes + 3u) & ~3u;
+  const std::uint32_t total = 12u + 8u + static_cast<std::uint32_t>(json.size()) + 8u + bin_padded;
+  std::ofstream glb(path, std::ios::binary | std::ios::trunc);
+  if (!glb) throw std::runtime_error("cannot write " + path.string());
+  auto write_u32 = [&](std::uint32_t value) {
+    char bytes[4];
+    for (int i = 0; i < 4; ++i) bytes[i] = static_cast<char>((value >> (8 * i)) & 0xff);
+    glb.write(bytes, 4);
+  };
+  write_u32(0x46546C67u);
+  write_u32(2u);
+  write_u32(total);
+  write_u32(static_cast<std::uint32_t>(json.size()));
+  write_u32(0x4E4F534Au);
+  glb.write(json.data(), static_cast<std::streamsize>(json.size()));
+  write_u32(bin_padded);
+  write_u32(0x004E4942u);
+  if (bin_bytes != 0) {
+    append_file(glb, pos_path);
+    append_file(glb, nrm_path);
+    append_file(glb, idx_path);
+  }
+  for (std::uint32_t i = bin_bytes; i < bin_padded; ++i) {
+    const char zero = 0;
+    glb.write(&zero, 1);
+  }
 }
 
 void bind_optional_id(Stmt& stmt, int index, std::int64_t id) {
@@ -639,18 +707,19 @@ void write_scene_package(Scene& scene, const ConvertOptions& options,
     triangles += static_cast<int>(element.mesh.indices.size() / 3);
     ++with_mesh;
   }
+  scene.triangles = triangles;
 
   const auto staging = make_temp_dir();
   try {
     std::filesystem::create_directories(staging / "mesh" / "elements");
-    std::vector<const Element*> meshed;
-    for (const Element& element : scene.elements) {
+    std::vector<Element*> meshed;
+    for (Element& element : scene.elements) {
       if (!element.has_mesh) continue;
       meshed.push_back(&element);
-      write_binary(staging / "mesh" / "elements" / (std::to_string(element.id) + ".glb"),
-                   build_glb({&element}));
+      write_glb_file(staging / "mesh" / "elements" / (std::to_string(element.id) + ".glb"),
+                     {&element}, false);
     }
-    write_binary(staging / "mesh" / "lod0.glb", build_glb(meshed));
+    write_glb_file(staging / "mesh" / "lod0.glb", meshed, true);
     write_sqlite(scene, staging / "meta.sqlite");
     if (options.write_brep) write_brep(scene, staging / "brep.pack", staging / "brep.index");
 
@@ -692,11 +761,13 @@ void write_scene_package(Scene& scene, const ConvertOptions& options,
     counts.set("elements_with_mesh", Json::integer(with_mesh));
     counts.set("elements_without_geometry",
                Json::integer(static_cast<std::int64_t>(scene.elements.size()) - with_mesh));
+    counts.set("elements_failed", Json::integer(scene.failed));
     counts.set("triangles_lod0", Json::integer(triangles));
     counts.set("warnings", Json::integer(static_cast<std::int64_t>(scene.warnings.size())));
     manifest.set("counts", std::move(counts));
+    manifest.set("completeness", Json::string(scene.completeness_ok ? "ok" : "incomplete"));
     Json mesh = Json::object();
-    mesh.set("generator", Json::string("analytic-extrusion-v1"));
+    mesh.set("generator", Json::string(scene.mesh_generator));
     mesh.set("linear_deflection_m", Json::real(options.linear_deflection_m));
     mesh.set("angular_deflection_rad", Json::real(options.angular_deflection_rad));
     Json lods = Json::array();
