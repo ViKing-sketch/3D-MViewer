@@ -59,7 +59,13 @@ fbv_prop find_prop(fbv_package* package, std::int64_t id, const std::string& nam
 }
 
 int run_cli(const std::string& command) {
+#if defined(_WIN32)
+  // cmd.exe /c drops the first and last quote when the line starts with `"`.
+  const std::string wrapped = "\"" + command + "\"";
+  const int rc = std::system(wrapped.c_str());
+#else
   const int rc = std::system(command.c_str());
+#endif
   if (rc == -1) return -1;
 #if defined(_WIN32)
   return rc;
@@ -337,10 +343,15 @@ END-ISO-10303-21;
     const std::string cmd = std::string("\"") + fbvconv + "\" \"" +
                             (testdata / "sample_wall.ifc").string() + "\" -o \"" +
                             cli_out.string() + "\"";
-    CHECK(run_cli(cmd) == 0);
+    const int cli_rc = run_cli(cmd);
+    if (cli_rc != 0) std::cerr << "cli exit " << cli_rc << ": " << cmd << "\n";
+    CHECK(cli_rc == 0);
     const std::string validate_cmd =
         std::string("\"") + validator + "\" \"" + cli_out.string() + "\"";
-    CHECK(run_cli(validate_cmd) == 0);
+    const int validate_rc = run_cli(validate_cmd);
+    if (validate_rc != 0)
+      std::cerr << "validate exit " << validate_rc << ": " << validate_cmd << "\n";
+    CHECK(validate_rc == 0);
   }
 
   if (g_failed != 0) {
