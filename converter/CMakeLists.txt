@@ -15,10 +15,12 @@ fbv_warnings(fbv_converter)
 add_executable(fbvconv src/main.cpp)
 target_link_libraries(fbvconv PRIVATE fbv_converter)
 fbv_warnings(fbvconv)
+fbv_copy_core_dll(fbvconv)
 
 add_executable(pkg_validate src/pkg_validate_main.cpp)
 target_link_libraries(pkg_validate PRIVATE fbv_converter)
 fbv_warnings(pkg_validate)
+fbv_copy_core_dll(pkg_validate)
 
 if(FBV_BUILD_TESTS)
   file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/testdata" FBV_TESTDATA_DIR)
@@ -26,6 +28,7 @@ if(FBV_BUILD_TESTS)
   target_link_libraries(converter_tests PRIVATE fbv_converter fbv_core)
   target_compile_definitions(converter_tests PRIVATE FBV_TESTDATA_DIR="${FBV_TESTDATA_DIR}")
   fbv_warnings(converter_tests)
+  fbv_copy_core_dll(converter_tests)
   add_test(NAME converter_tests COMMAND converter_tests)
   set_tests_properties(converter_tests PROPERTIES
     ENVIRONMENT "FBV_FBVCONV=$<TARGET_FILE:fbvconv>;FBV_PKG_VALIDATE=$<TARGET_FILE:pkg_validate>"

@@ -30,6 +30,17 @@ function(fbv_warnings target)
   endif()
 endfunction()
 
+# Windows loads fbv_core.dll from the directory of the executable.
+function(fbv_copy_core_dll target)
+  if(WIN32)
+    add_custom_command(
+      TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fbv_core>
+              $<TARGET_FILE_DIR:${target}>
+      VERBATIM)
+  endif()
+endfunction()
+
 add_subdirectory(third_party/sqlite)
 add_subdirectory(deps)
 add_subdirectory(core)
