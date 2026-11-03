@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'appearance.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
@@ -26,6 +27,11 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
   int? _selectedId;
   String _query = '';
   String? _classFilter;
+  final Set<int> _hidden = {};
+  final Set<int> _isolated = {};
+  bool _xray = false;
+  int _renderRevision = 0;
+  final _viewport = GlobalKey<FilamentViewportState>();
   late final TabController _tabs;
 
   @override
@@ -60,11 +66,82 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
         element.ifcClass.toLowerCase().contains(query);
   }
 
+  void _choose(int? id) {
+    setState(() {
+      _selectedId = id;
+      _renderRevision++;
+    });
+  }
+
+  void _hideSelected() {
+    final id = _selectedId;
+    if (id == null) return;
+    setState(() {
+      _hidden.add(id);
+      _renderRevision++;
+    });
+  }
+
+  void _showAll() {
+    setState(() {
+      _hidden.clear();
+      _isolated.clear();
+      _xray = false;
+      _renderRevision++;
+    });
+  }
+
+  void _isolateSelected() {
+    final id = _selectedId;
+    if (id == null) return;
+    setState(() {
+      if (_isolated.length == 1 && _isolated.contains(id)) {
+        _isolated.clear();
+      } else {
+        _isolated
+          ..clear()
+          ..add(id);
+      }
+      _renderRevision++;
+    });
+  }
+
+  void _toggleXray() {
+    setState(() {
+      _xray = !_xray;
+      _renderRevision++;
+    });
+  }
+
   ElementInfo? get _selected {
     for (final element in _elements) {
       if (element.id == _selectedId) return element;
     }
     return null;
+  }
+
+  Widget _renderBar(S strings) {
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        children: [
+          TextButton(onPressed: () => _viewport.currentState?.fitAll(), child: Text(strings.fitAll)),
+          TextButton(onPressed: () => _viewport.currentState?.fitSelected(), child: Text(strings.fitSelected)),
+          TextButton(onPressed: _hideSelected, child: Text(strings.hide)),
+          TextButton(onPressed: _showAll, child: Text(strings.showAll)),
+          TextButton(onPressed: _isolateSelected, child: Text(strings.isolate)),
+          TextButton(onPressed: _toggleXray, child: Text(strings.xray)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('front'), child: Text(strings.viewFront)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('back'), child: Text(strings.viewBack)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('left'), child: Text(strings.viewLeft)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('right'), child: Text(strings.viewRight)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('top'), child: Text(strings.viewTop)),
+          TextButton(onPressed: () => _viewport.currentState?.setCamera('bottom'), child: Text(strings.viewBottom)),
+        ],
+      ),
+    );
   }
 
   @override
@@ -81,6 +158,7 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
           ],
         ),
       ),
+      floatingActionButton: const AppearanceButtons(tag: 'model'),
       body: _error != null
           ? Center(child: Text(_error!))
           : _session == null
@@ -142,15 +220,36 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
           child: LayoutBuilder(
             builder: (context, constraints) {
               final wide = constraints.maxWidth >= 1100;
-              final viewport = SizedBox(
-                height: wide ? null : 180,
-                width: wide ? 280 : null,
-                child: FilamentViewport(
-                  strings: strings,
-                  elementCount: _elements.length,
-                  selectedName: selected?.name,
-                ),
+              // The default widget surface leaves about 370px here. A 320px
+              // view plus the property pane overflows that and the tree never
+              // lays out. Short windows keep the original 96px slot.
+              final short = !wide && constraints.maxHeight < 520;
+              final filament = FilamentViewport(
+                key: _viewport,
+                strings: strings,
+                rootPath: _session?.rootPath,
+                elementCount: _elements.length,
+                selectedName: selected?.name,
+                selectedId: _selectedId,
+                hiddenIds: _hidden,
+                isolatedIds: _isolated,
+                xray: _xray,
+                renderRevision: _renderRevision,
+                onPick: _choose,
               );
+              final viewport = short
+                  ? Stack(
+                      children: [
+                        Positioned.fill(child: filament),
+                        Positioned(left: 0, right: 0, bottom: 0, child: _renderBar(strings)),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        Expanded(child: filament),
+                        _renderBar(strings),
+                      ],
+                    );
               final tree = _tree(context);
               final props = _properties(context, selected);
               if (wide) {
@@ -164,7 +263,7 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
               }
               return Column(
                 children: [
-                  SizedBox(height: 96, child: viewport),
+                  SizedBox(height: short ? 96 : 320, child: viewport),
                   Expanded(child: tree),
                   SizedBox(height: 160, child: props),
                 ],
@@ -208,7 +307,7 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
       selected: selected,
       title: Text(element.name.isEmpty ? element.ifcClass : element.name),
       subtitle: Text(element.ifcClass),
-      onTap: () => setState(() => _selectedId = element.id),
+      onTap: () => _choose(element.id),
     );
   }
 

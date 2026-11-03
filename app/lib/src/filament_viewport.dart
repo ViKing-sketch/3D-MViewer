@@ -1,20 +1,176 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+
+import 'filament_channel.dart';
 import 'strings.dart';
 
-/// Placeholder for the Filament platform view.
+/// Filament platform view on Android. Other targets keep the layout slot.
 ///
-/// The real renderer is described in docs/rendering.md: a Kotlin/Swift
-/// Filament view behind the platform channel `fbv/filament`, fed by GLB from
-/// the package and ElementId from fbv_core. This widget keeps the layout slot
-/// so the shell can be tested without the native renderer.
-class FilamentViewport extends StatelessWidget {
+/// Channel and view type are `fbv/filament`, as described in docs/rendering.md.
+/// The native view loads `mesh/lod0.glb` and any `mesh/elements/<id>.glb` that
+/// is not already in that scene, and maps picks through `extras.elementId`.
+class FilamentViewport extends StatefulWidget {
   const FilamentViewport({
     super.key,
     required this.strings,
     required this.elementCount,
     required this.selectedName,
+    this.rootPath,
+    this.selectedId,
+    this.hiddenIds = const {},
+    this.isolatedIds = const {},
+    this.xray = false,
+    this.renderRevision = 0,
+    this.onPick,
+    this.onStatus,
   });
+
+  final S strings;
+  final int elementCount;
+  final String? selectedName;
+  final String? rootPath;
+  final int? selectedId;
+  final Set<int> hiddenIds;
+  final Set<int> isolatedIds;
+  final bool xray;
+  final int renderRevision;
+  final ValueChanged<int?>? onPick;
+  final ValueChanged<String>? onStatus;
+
+  @override
+  State<FilamentViewport> createState() => FilamentViewportState();
+}
+
+class FilamentViewportState extends State<FilamentViewport> {
+  FilamentCommands? _commands;
+  String? _status;
+
+  Future<void> fitAll() => _commands?.fit(selected: false) ?? Future<void>.value();
+
+  Future<void> fitSelected() => _commands?.fit(selected: true) ?? Future<void>.value();
+
+  Future<void> setCamera(String preset) => _commands?.setCamera(preset) ?? Future<void>.value();
+
+  @override
+  void didUpdateWidget(FilamentViewport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.renderRevision != widget.renderRevision || oldWidget.selectedId != widget.selectedId) {
+      _pushState();
+    }
+    if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
+      _commands?.load(widget.rootPath!);
+    }
+  }
+
+  Future<void> _onCreated(int id) async {
+    final channel = MethodChannel('fbv/filament/$id');
+    final commands = FilamentCommands(channel);
+    _commands = commands;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'onPick') {
+        final args = call.arguments;
+        final raw = args is Map ? args['elementId'] : null;
+        final picked = raw is num ? raw.toInt() : 0;
+        widget.onPick?.call(picked == 0 ? null : picked);
+      } else if (call.method == 'onStatus') {
+        final args = call.arguments;
+        if (args is Map) _applyStatus(args);
+      }
+      return null;
+    });
+    final existing = await commands.sync();
+    if (existing != null && mounted) _applyStatus(existing);
+    if (widget.rootPath != null) await commands.load(widget.rootPath!);
+    await _pushState();
+  }
+
+  void _applyStatus(Map<dynamic, dynamic> raw) {
+    final code = raw['code']?.toString() ?? '';
+    final strings = widget.strings;
+    final String text;
+    if (code == 'loading') {
+      text = strings.loadingMesh;
+    } else if (code == 'ready') {
+      text = strings.meshReady(
+        raw['lod0'] == true,
+        (raw['elementFiles'] as num?)?.toInt() ?? 0,
+        (raw['drawn'] as num?)?.toInt() ?? 0,
+      );
+    } else {
+      text = raw['message']?.toString() ?? code;
+    }
+    setState(() => _status = text);
+    widget.onStatus?.call(text);
+  }
+
+  Future<void> _pushState() async {
+    final commands = _commands;
+    if (commands == null) return;
+    await commands.setViewState(
+      selectedId: widget.selectedId,
+      hidden: widget.hiddenIds.toList(),
+      isolated: widget.isolatedIds.toList(),
+      xray: widget.xray,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!Platform.isAndroid || widget.rootPath == null) {
+      return _Fallback(strings: widget.strings, elementCount: widget.elementCount, selectedName: widget.selectedName);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(child: _platformView(context)),
+        if (_status != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Text(_status!, maxLines: 2, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+    );
+  }
+
+  Widget _platformView(BuildContext context) {
+    final gestures = <Factory<OneSequenceGestureRecognizer>>{
+      Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+    };
+    return PlatformViewLink(
+      viewType: 'fbv/filament',
+      surfaceFactory: (context, controller) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          gestureRecognizers: gestures,
+          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+        );
+      },
+      onCreatePlatformView: (params) {
+        final created = PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: 'fbv/filament',
+          layoutDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
+          creationParams: {'root': widget.rootPath},
+          creationParamsCodec: const StandardMessageCodec(),
+          onFocus: () => params.onFocusChanged(true),
+        );
+        created.addOnPlatformViewCreatedListener((id) {
+          params.onPlatformViewCreated(id);
+          _onCreated(id);
+        });
+        return created..create();
+      },
+    );
+  }
+}
+
+class _Fallback extends StatelessWidget {
+  const _Fallback({required this.strings, required this.elementCount, required this.selectedName});
 
   final S strings;
   final int elementCount;
@@ -34,12 +190,8 @@ class FilamentViewport extends StatelessWidget {
             const SizedBox(height: 8),
             Text(strings.renderStub, style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: 12),
-            Text(
-              '${strings.elements}: $elementCount',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            if (selectedName != null)
-              Text(selectedName!, style: Theme.of(context).textTheme.titleLarge),
+            Text('${strings.elements}: $elementCount', style: Theme.of(context).textTheme.titleMedium),
+            if (selectedName != null) Text(selectedName!, style: Theme.of(context).textTheme.titleLarge),
           ],
         ),
       ),

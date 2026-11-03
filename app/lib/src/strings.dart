@@ -12,8 +12,8 @@ class S {
   String get specification => russian ? 'Спецификация' : 'Specification';
   String get searchHint => russian ? 'Имя, марка, GlobalId' : 'Name, tag, GlobalId';
   String get renderStub => russian
-      ? '3D-рендер Filament будет подключён отдельным шагом. Сейчас доступны дерево, свойства и спецификация.'
-      : 'The Filament viewport is planned as a separate step. The tree, properties and specification are available.';
+      ? '3D-рендер Filament работает на Android. Здесь доступны дерево, свойства и спецификация.'
+      : 'The Filament renderer runs on Android. The tree, properties and specification are available here.';
   String get about => russian ? 'О программе' : 'About';
   String get delete => russian ? 'Удалить' : 'Delete';
   String get deleteConfirm => russian ? 'Удалить пакет с устройства?' : 'Delete this package from the device?';
@@ -33,6 +33,31 @@ class S {
   String get dataSourceCore => 'fbv_core';
   String get dataSourceSqlite => 'sqlite';
   String get back => russian ? 'Назад' : 'Back';
+  String get importPackage => russian ? 'Импорт пакета' : 'Import package';
+  String get importFailed => russian ? 'Не удалось импортировать пакет' : 'Could not import the package';
+  String get libraryStored => russian
+      ? 'Пакеты хранятся в памяти приложения. Общая папка Android недоступна.'
+      : 'Packages are kept in app storage. Android shared storage cannot be read directly.';
+  String get fitAll => russian ? 'Вписать всё' : 'Fit all';
+  String get fitSelected => russian ? 'Вписать выбранное' : 'Fit selected';
+  String get hide => russian ? 'Скрыть' : 'Hide';
+  String get showAll => russian ? 'Показать всё' : 'Show all';
+  String get isolate => russian ? 'Изолировать' : 'Isolate';
+  String get xray => russian ? 'Рентген' : 'X-ray';
+  String get viewFront => russian ? 'Спереди' : 'Front';
+  String get viewBack => russian ? 'Сзади' : 'Back';
+  String get viewLeft => russian ? 'Слева' : 'Left';
+  String get viewRight => russian ? 'Справа' : 'Right';
+  String get viewTop => russian ? 'Сверху' : 'Top';
+  String get viewBottom => russian ? 'Снизу' : 'Bottom';
+  String get loadingMesh => russian ? 'Загрузка меша…' : 'Loading mesh…';
+
+  String meshReady(bool lod0, int elementFiles, int drawn) {
+    final lod = lod0 ? 'lod0' : (russian ? 'нет lod0' : 'no lod0');
+    return russian
+        ? 'Сцена: $lod, GLB элементов: $elementFiles, в кадре: $drawn'
+        : 'Scene: $lod, element GLBs: $elementFiles, drawn: $drawn';
+  }
 
   String lengthMm(double metres) {
     final mm = metres * 1000.0;

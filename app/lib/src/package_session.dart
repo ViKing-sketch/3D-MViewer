@@ -1,13 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:archive/archive.dart';
-import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'model.dart';
 import 'sqlite_setup.dart';
+import 'zip_store.dart';
 
 class PackageException implements Exception {
   PackageException(this.message);
@@ -17,12 +16,16 @@ class PackageException implements Exception {
 }
 
 class PackageSession {
-  PackageSession._(this.summary, this._db, this._temp, this.manifest);
+  PackageSession._(this.summary, this._db, this._temp, this.manifest, this.rootPath);
 
   final PackageSummary summary;
   final Database _db;
   final Directory? _temp;
   final Map<String, dynamic> manifest;
+
+  /// Directory that contains `manifest.json` and `mesh/`. For a zip package this
+  /// is the streamed extract, not the archive itself.
+  final String rootPath;
 
   static PackageSession openPath(String path) {
     configureSqlite();
@@ -33,8 +36,17 @@ class PackageSession {
     if (entity == FileSystemEntityType.file) {
       final temp = Directory.systemTemp.createTempSync('fbvpkg-');
       try {
-        _unzip(File(path), temp);
-        return _openDirectory(temp.path, deleteOnClose: temp, isZip: true, displayPath: path);
+        final hashes = ZipStore.extract(File(path), temp);
+        return _openDirectory(
+          temp.path,
+          deleteOnClose: temp,
+          isZip: true,
+          displayPath: path,
+          hashes: hashes,
+        );
+      } on ZipStoreException catch (error) {
+        temp.deleteSync(recursive: true);
+        throw PackageException(error.message);
       } catch (_) {
         temp.deleteSync(recursive: true);
         rethrow;
@@ -48,6 +60,8 @@ class PackageSession {
     required Directory? deleteOnClose,
     required bool isZip,
     String? displayPath,
+    bool verifyParts = true,
+    Map<String, String>? hashes,
   }) {
     final root = Directory(directory);
     final manifestFile = File(p.join(root.path, 'manifest.json'));
@@ -57,7 +71,7 @@ class PackageSession {
     final manifest = jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
     final version = manifest['format_version'];
     if (version != 1) throw PackageException('Неподдерживаемая format_version: $version');
-    _verifyParts(root, manifest);
+    if (verifyParts) _verifyParts(root, manifest, hashes);
     final db = sqlite3.open(p.join(root.path, 'meta.sqlite'), mode: OpenMode.readOnly);
     final count = db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
     final source = (manifest['source'] as Map?) ?? const {};
@@ -74,20 +88,26 @@ class PackageSession {
       db,
       deleteOnClose,
       manifest,
+      root.path,
     );
   }
 
-  static void _verifyParts(Directory root, Map<String, dynamic> manifest) {
+  static void _verifyParts(
+    Directory root,
+    Map<String, dynamic> manifest,
+    Map<String, String>? hashes,
+  ) {
     final parts = manifest['parts'];
     if (parts is! Map) throw PackageException('manifest.parts отсутствует');
     for (final entry in parts.entries) {
-      final file = File(p.join(root.path, entry.key.toString()));
+      final name = entry.key.toString().replaceAll('\\', '/');
+      final file = File(p.joinAll([root.path, ...name.split('/')]));
       if (!file.existsSync()) throw PackageException('Нет части пакета ${entry.key}');
       final meta = entry.value;
       if (meta is! Map) continue;
       final expected = meta['sha256']?.toString() ?? '';
       if (expected.isEmpty) continue;
-      final actual = sha256.convert(file.readAsBytesSync()).toString();
+      final actual = hashes?[name] ?? ZipStore.hashFile(file);
       if (actual != expected) throw PackageException('Хэш не совпал: ${entry.key}');
     }
   }
@@ -100,20 +120,6 @@ class PackageSession {
       if (value is Map && value['bytes'] is num) sum += (value['bytes'] as num).toInt();
     }
     return sum;
-  }
-
-  static void _unzip(File zipFile, Directory dest) {
-    final archive = ZipDecoder().decodeBytes(zipFile.readAsBytesSync());
-    for (final file in archive) {
-      if (!file.isFile) continue;
-      final name = file.name.replaceAll('\\', '/');
-      if (name.startsWith('/') || name.split('/').contains('..')) {
-        throw PackageException('Недопустимое имя в архиве: $name');
-      }
-      final out = File(p.join(dest.path, name));
-      out.parent.createSync(recursive: true);
-      out.writeAsBytesSync(file.content as List<int>);
-    }
   }
 
   List<SpatialNode> spatial() {
@@ -259,26 +265,35 @@ List<PackageSummary> scanLibrary(String directory) {
   for (final entity in root.listSync(followLinks: false)) {
     if (entity is Directory && File(p.join(entity.path, 'manifest.json')).existsSync()) {
       try {
-        final session = PackageSession._openDirectory(entity.path, deleteOnClose: null, isZip: false);
+        final session = PackageSession._openDirectory(
+          entity.path,
+          deleteOnClose: null,
+          isZip: false,
+          verifyParts: false,
+        );
         found.add(session.summary);
         session.close();
       } on PackageException {
         continue;
       }
     } else if (entity is File && entity.path.toLowerCase().endsWith('.fbvpkg')) {
+      Directory? temp;
       try {
-        final temp = Directory.systemTemp.createTempSync('fbvscan-');
-        PackageSession._unzip(entity, temp);
+        temp = Directory.systemTemp.createTempSync('fbvscan-');
+        // Listing a library must not unpack meshes. Integrity is checked on open.
+        ZipStore.extract(entity, temp, only: const {'manifest.json', 'meta.sqlite'});
         final session = PackageSession._openDirectory(
           temp.path,
           deleteOnClose: temp,
           isZip: true,
           displayPath: entity.path,
+          verifyParts: false,
         );
         found.add(session.summary);
         session.close();
-      } on PackageException {
-        continue;
+        temp = null;
+      } catch (_) {
+        temp?.deleteSync(recursive: true);
       }
     }
   }

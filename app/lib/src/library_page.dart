@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import 'appearance.dart';
 import 'model.dart';
 import 'model_page.dart';
+import 'package_import.dart';
 import 'package_session.dart';
 import 'strings.dart';
 
@@ -16,21 +18,32 @@ class LibraryPage extends StatefulWidget {
   final String? initialDirectory;
 
   @override
-  State<LibraryPage> createState() => _LibraryPageState();
+  State<LibraryPage> createState() => LibraryPageState();
 }
 
-class _LibraryPageState extends State<LibraryPage> {
+class LibraryPageState extends State<LibraryPage> {
   late final TextEditingController _path;
   List<PackageSummary> _packages = const [];
   String? _error;
+  String _draft = '';
 
   @override
   void initState() {
     super.initState();
-    _path = TextEditingController(text: widget.initialDirectory ?? '');
-    if ((widget.initialDirectory ?? '').isNotEmpty) {
+    _draft = widget.initialDirectory ?? '';
+    _path = TextEditingController(text: _draft);
+    if (Platform.isAndroid && _draft.isEmpty) {
+      PackageImport.libraryDirectory().then((dir) {
+        if (!mounted || dir == null || dir.isEmpty) return;
+        setState(() {
+          _draft = dir;
+          _path.text = dir;
+        });
+        scan();
+      });
+    } else if (_draft.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scan();
+        if (mounted) scan();
       });
     }
   }
@@ -41,11 +54,23 @@ class _LibraryPageState extends State<LibraryPage> {
     super.dispose();
   }
 
-  void _scan() {
+  void scan() {
+    final folder = _draft.trim().isEmpty ? _path.text.trim() : _draft.trim();
     setState(() {
       _error = null;
-      _packages = scanLibrary(_path.text.trim());
+      _packages = scanLibrary(folder);
     });
+  }
+
+  Future<void> _import() async {
+    try {
+      final path = await PackageImport.pick();
+      if (!mounted || path == null || path.isEmpty) return;
+      await _open(path);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
   }
 
   Future<void> _openSample() async {
@@ -76,7 +101,7 @@ class _LibraryPageState extends State<LibraryPage> {
         builder: (context) => ModelPage(path: path, strings: widget.strings),
       ),
     );
-    _scan();
+    scan();
   }
 
   Future<void> _delete(PackageSummary package) async {
@@ -94,7 +119,7 @@ class _LibraryPageState extends State<LibraryPage> {
     );
     if (confirmed != true) return;
     deletePackage(package.path);
-    _scan();
+    scan();
   }
 
   @override
@@ -102,23 +127,46 @@ class _LibraryPageState extends State<LibraryPage> {
     final strings = widget.strings;
     return Scaffold(
       appBar: AppBar(title: Text(strings.library)),
+      floatingActionButton: const AppearanceButtons(tag: 'library'),
       body: Column(
         children: [
+          if (Platform.isAndroid)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(strings.libraryStored),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _path,
-                    decoration: InputDecoration(
-                      hintText: strings.pathHint,
-                      border: const OutlineInputBorder(),
+                if (!Platform.isAndroid)
+                  Expanded(
+                    child: TextField(
+                      controller: _path,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        hintText: strings.pathHint,
+                        border: const OutlineInputBorder(),
+                      ),
+                      onChanged: (value) => _draft = value,
+                      onSubmitted: (_) {
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        scan();
+                      },
+                      onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(onPressed: _scan, child: Text(strings.scan)),
+                if (!Platform.isAndroid) const SizedBox(width: 8),
+                if (!Platform.isAndroid) FilledButton(onPressed: scan, child: Text(strings.scan)),
+                if (Platform.isAndroid)
+                  FilledButton.icon(
+                    onPressed: _import,
+                    icon: const Icon(Icons.folder_open),
+                    label: Text(strings.importPackage),
+                  ),
               ],
             ),
           ),
