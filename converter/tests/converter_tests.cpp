@@ -84,6 +84,17 @@ int run_cli(const std::string& command) {
 int main() {
   CHECK(fbv::decode_ifc_string("\\X2\\041C04300440043A0430\\X0\\") == "Марка");
   CHECK(fbv::decode_ifc_string("\\X2\\041D0421002D00310032\\X0\\") == "НС-12");
+  CHECK(fbv::decode_ifc_string("\\S\\ ") == "\xC2\xA0");
+  CHECK(fbv::decode_ifc_string("\\X\\A0") == "\xC2\xA0");
+  {
+    std::string raw(53, 'A');
+    raw.push_back(static_cast<char>(0xA0));
+    const auto text = fbv::decode_ifc_string(raw);
+    CHECK(text.size() == 55);
+    CHECK(text.compare(0, 53, std::string(53, 'A')) == 0);
+    CHECK(static_cast<unsigned char>(text[53]) == 0xC2);
+    CHECK(static_cast<unsigned char>(text[54]) == 0xA0);
+  }
   {
     const auto quoted = fbv::parse_ifc(
         "ISO-10303-21;HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;DATA;"

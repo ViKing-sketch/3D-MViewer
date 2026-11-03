@@ -118,7 +118,7 @@ flutter run -d linux
 flutter build apk --debug --target-platform android-arm64,android-x64
 ```
 
-Сборка APK требует Android SDK platform 37 (его требует Filament 1.77.3), build-tools 36, NDK 28.2 и CMake 3.22. ABI в пакете — `arm64-v8a` и `x86_64`.
+Сборка APK требует Android SDK platform 37 (его требует Filament 1.77.3), build-tools 36, NDK 28.2 и CMake 3.22. Пакет SDK называется `platforms;android-37.0`: в `app/android/app/build.gradle.kts` стоит `compileSdk { version = release(37) { minorApiLevel = 0 } }`, а не `compileSdk = 37` (тот ищет каталог `android-37`). ABI в пакете — `arm64-v8a` и `x86_64`. Распаковка `.fbvpkg` идёт в отдельном изоляте с прогрессом. На устройстве до 3 ГиБ ОЗУ lod0 крупнее 96 МиБ заменяется потоковой загрузкой GLB элементов и коробочными прокси.
 
 На Android импорт идёт через системный выбор файла (SAF) или «Открыть с помощью» / «Поделиться»: пакет копируется в хранилище приложения, общий каталог Android 11+ напрямую не читается. Жесты 3D — в окне Filament; дерево выбора с ним синхронизировано.
 

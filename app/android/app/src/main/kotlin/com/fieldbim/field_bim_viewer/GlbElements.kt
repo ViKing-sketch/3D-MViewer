@@ -11,7 +11,13 @@ data class ElementGeom(
     val min: FloatArray,
     val max: FloatArray,
     val color: FloatArray,
-)
+) {
+    /** Package Z-up metres to Filament Y-up: (x, y, z) -> (x, z, -y). */
+    fun upright(): ElementGeom = copy(
+        min = floatArrayOf(min[0], min[2], -max[1]),
+        max = floatArrayOf(max[0], max[2], -min[1]),
+    )
+}
 
 object GlbElements {
     fun readJson(file: File): String {

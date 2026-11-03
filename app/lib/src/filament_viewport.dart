@@ -97,9 +97,11 @@ class FilamentViewportState extends State<FilamentViewport> {
       text = strings.loadingMesh;
     } else if (code == 'ready') {
       text = strings.meshReady(
-        raw['lod0'] == true,
-        (raw['elementFiles'] as num?)?.toInt() ?? 0,
-        (raw['drawn'] as num?)?.toInt() ?? 0,
+        lod0: raw['lod0'] == true,
+        elementFiles: (raw['elementFiles'] as num?)?.toInt() ?? 0,
+        drawn: (raw['drawn'] as num?)?.toInt() ?? 0,
+        partial: raw['partial'] == true,
+        boxes: (raw['boxes'] as num?)?.toInt() ?? 0,
       );
     } else {
       text = raw['message']?.toString() ?? code;

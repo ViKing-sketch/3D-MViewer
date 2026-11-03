@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -52,19 +54,36 @@ class ZipStore {
     File zip,
     Directory dest, {
     Set<String>? only,
+    void Function(int done, int total)? onProgress,
   }) {
     final raf = zip.openSync();
     final hashes = <String, String>{};
     try {
-      for (final entry in _centralDirectory(raf)) {
-        if (entry.isDirectory) continue;
-        if (only != null && !only.contains(entry.name)) continue;
+      final entries = _centralDirectory(raf).where((entry) {
+        if (entry.isDirectory) return false;
+        if (only != null && !only.contains(entry.name)) return false;
+        return true;
+      }).toList();
+      var total = 0;
+      for (final entry in entries) {
+        total += entry.size;
+      }
+      var done = 0;
+      onProgress?.call(done, total);
+      for (final entry in entries) {
         if (entry.method != 0) {
           throw ZipStoreException('ZIP entry ${entry.name} is not STORE');
         }
         final out = _safeFile(dest, entry.name);
         out.parent.createSync(recursive: true);
-        hashes[entry.name] = _copyEntry(raf, entry, out);
+        hashes[entry.name] = _copyEntry(
+          raf,
+          entry,
+          out,
+          onChunk: (copied) => onProgress?.call(done + copied, total),
+        );
+        done += entry.size;
+        onProgress?.call(done, total);
       }
       if (only != null) {
         for (final name in only) {
@@ -77,6 +96,53 @@ class ZipStore {
     } finally {
       raf.closeSync();
     }
+  }
+
+  /// Same as [extract], but the copy runs on a background isolate.
+  static Future<Map<String, String>> extractAsync(
+    File zip,
+    Directory dest, {
+    Set<String>? only,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final receive = ReceivePort();
+    final errors = ReceivePort();
+    final completer = Completer<Map<String, String>>();
+    final spawned = <Isolate>[];
+    var closed = false;
+    void finish() {
+      if (closed) return;
+      closed = true;
+      if (spawned.isNotEmpty) spawned.first.kill(priority: Isolate.immediate);
+      receive.close();
+      errors.close();
+    }
+
+    receive.listen((message) {
+      if (message is List && message.isNotEmpty && message.first == 'p') {
+        onProgress?.call(message[1] as int, message[2] as int);
+        return;
+      }
+      if (message is List && message.isNotEmpty && message.first == 'ok') {
+        final hashes = (message[1] as Map).map((key, value) => MapEntry('$key', '$value'));
+        if (!completer.isCompleted) completer.complete(hashes);
+        finish();
+      }
+    });
+    errors.listen((message) {
+      if (completer.isCompleted) return;
+      final text = message is List && message.isNotEmpty ? message.first.toString() : '$message';
+      completer.completeError(ZipStoreException(text));
+      finish();
+    });
+    final isolate = await Isolate.spawn(
+      _extractOffUi,
+      _ExtractArgs(zip.path, dest.path, only?.toList(), receive.sendPort),
+      onError: errors.sendPort,
+    );
+    spawned.add(isolate);
+    if (completer.isCompleted) finish();
+    return completer.future;
   }
 
   static String hashFile(File file) {
@@ -155,7 +221,12 @@ class ZipStore {
     return found;
   }
 
-  static String _copyEntry(RandomAccessFile raf, ZipEntryInfo entry, File out) {
+  static String _copyEntry(
+    RandomAccessFile raf,
+    ZipEntryInfo entry,
+    File out, {
+    void Function(int copied)? onChunk,
+  }) {
     raf.setPositionSync(entry.localOffset);
     final header = raf.readSync(30);
     if (header.length != 30 || _u32(header, 0) != 0x04034b50) {
@@ -169,6 +240,7 @@ class ZipStore {
     final input = sha256.startChunkedConversion(hashSink);
     try {
       var left = entry.size;
+      var copied = 0;
       while (left > 0) {
         final n = left < chunkSize ? left : chunkSize;
         final bytes = raf.readSync(n);
@@ -176,6 +248,8 @@ class ZipStore {
         sink.writeFromSync(bytes);
         input.add(bytes);
         left -= n;
+        copied += n;
+        onChunk?.call(copied);
       }
     } finally {
       sink.closeSync();
@@ -214,6 +288,25 @@ class ZipStore {
       (bytes[offset + 1] << 8) |
       (bytes[offset + 2] << 16) |
       (bytes[offset + 3] << 24);
+}
+
+class _ExtractArgs {
+  _ExtractArgs(this.zipPath, this.destPath, this.only, this.send);
+
+  final String zipPath;
+  final String destPath;
+  final List<String>? only;
+  final SendPort send;
+}
+
+void _extractOffUi(_ExtractArgs args) {
+  final hashes = ZipStore.extract(
+    File(args.zipPath),
+    Directory(args.destPath),
+    only: args.only?.toSet(),
+    onProgress: (done, total) => args.send.send(<Object>['p', done, total]),
+  );
+  args.send.send(<Object>['ok', hashes]);
 }
 
 class _OneDigest implements Sink<Digest> {

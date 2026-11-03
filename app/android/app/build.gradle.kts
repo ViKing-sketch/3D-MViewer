@@ -6,8 +6,13 @@ plugins {
 
 android {
     namespace = "com.fieldbim.field_bim_viewer"
-    // Filament 1.77.3 AARs require compileSdk 37. Flutter 3.44 still defaults to 36.
-    compileSdk = 37
+    // Filament 1.77.3 requires API 37. A plain `compileSdk = 37` looks for the
+    // hash `android-37`, but the SDK package is `platforms/android-37.0`.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -31,6 +32,9 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
   final Set<int> _isolated = {};
   bool _xray = false;
   int _renderRevision = 0;
+  bool _opening = false;
+  int _extractDone = 0;
+  int _extractTotal = 0;
   final _viewport = GlobalKey<FilamentViewportState>();
   late final TabController _tabs;
 
@@ -38,6 +42,16 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
   void initState() {
     super.initState();
     _tabs = TabController(length: 2, vsync: this);
+    final type = FileSystemEntity.typeSync(widget.path);
+    if (type == FileSystemEntityType.file) {
+      _opening = true;
+      unawaited(_openZip());
+    } else {
+      _openSync();
+    }
+  }
+
+  void _openSync() {
     try {
       final session = PackageSession.openPath(widget.path);
       _session = session;
@@ -46,6 +60,38 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
       _specs = session.specifications();
     } catch (error) {
       _error = error.toString();
+    }
+  }
+
+  Future<void> _openZip() async {
+    try {
+      final session = await PackageSession.openPathAsync(
+        widget.path,
+        onProgress: (done, total) {
+          if (!mounted) return;
+          setState(() {
+            _extractDone = done;
+            _extractTotal = total;
+          });
+        },
+      );
+      if (!mounted) {
+        session.close();
+        return;
+      }
+      setState(() {
+        _session = session;
+        _spatial = session.spatial();
+        _elements = session.elements();
+        _specs = session.specifications();
+        _opening = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _opening = false;
+      });
     }
   }
 
@@ -161,8 +207,8 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
       floatingActionButton: const AppearanceButtons(tag: 'model'),
       body: _error != null
           ? Center(child: Text(_error!))
-          : _session == null
-              ? const SizedBox.shrink()
+          : _opening || _session == null
+              ? _extracting(strings)
               : TabBarView(
                   controller: _tabs,
                   children: [
@@ -170,6 +216,25 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
                     _specTab(context),
                   ],
                 ),
+    );
+  }
+
+  Widget _extracting(S strings) {
+    final total = _extractTotal;
+    final percent = total <= 0 ? 0 : (100 * _extractDone / total).round().clamp(0, 100);
+    final value = total <= 0 ? null : (_extractDone / total).clamp(0.0, 1.0);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(strings.extracting(percent)),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: value),
+          ],
+        ),
+      ),
     );
   }
 

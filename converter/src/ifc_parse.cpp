@@ -326,6 +326,76 @@ class Parser {
 
 }  // namespace
 
+namespace {
+
+// Windows-1251 for 0x80..0xBF. 0xC0..0xFF is U+0410..U+044F.
+const char32_t kCp1251Low[] = {
+    0x0402, 0x0403, 0x201A, 0x0453, 0x201E, 0x2026, 0x2020, 0x2021, 0x20AC, 0x2030, 0x0409,
+    0x2039, 0x040A, 0x040C, 0x040B, 0x040F, 0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+    0x2013, 0x2014, 0x0098, 0x2122, 0x0459, 0x203A, 0x045A, 0x045C, 0x045B, 0x045F, 0x00A0,
+    0x040E, 0x045E, 0x0408, 0x00A4, 0x0490, 0x00A6, 0x00A7, 0x0401, 0x00A9, 0x0404, 0x00AB,
+    0x00AC, 0x00AD, 0x00AE, 0x0407, 0x00B0, 0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6,
+    0x00B7, 0x0451, 0x2116, 0x0454, 0x00BB, 0x0458, 0x0405, 0x0455, 0x0457};
+
+void append_cp(std::string& out, char32_t cp) {
+  if (cp > 0x10FFFF) return;
+  if (cp < 0x80) {
+    out.push_back(static_cast<char>(cp));
+  } else if (cp < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+}
+
+char32_t cp1251_byte(unsigned char c) {
+  if (c < 0x80) return c;
+  if (c < 0xC0) return kCp1251Low[c - 0x80];
+  return 0x0410 + (c - 0xC0);
+}
+
+// Keep well-formed UTF-8. A lone continuation or an illegal lead (what Dart
+// reports as "Unexpected extension byte") is a code-page byte from an IFC
+// \S or \X escape, or from a Windows-1251 file copied through unchanged.
+std::string sanitize_stored_text(std::string_view in) {
+  std::string out;
+  out.reserve(in.size());
+  for (std::size_t i = 0; i < in.size();) {
+    const auto c = static_cast<unsigned char>(in[i]);
+    if (c < 0x80) {
+      out.push_back(static_cast<char>(c));
+      ++i;
+      continue;
+    }
+    int need = 0;
+    if (c >= 0xC2 && c <= 0xDF) need = 2;
+    else if ((c & 0xF0) == 0xE0) need = 3;
+    else if (c >= 0xF0 && c <= 0xF4) need = 4;
+    bool ok = need > 1 && i + static_cast<std::size_t>(need) <= in.size();
+    for (int k = 1; ok && k < need; ++k) {
+      if ((static_cast<unsigned char>(in[i + static_cast<std::size_t>(k)]) & 0xC0) != 0x80) ok = false;
+    }
+    if (ok) {
+      out.append(in.substr(i, static_cast<std::size_t>(need)));
+      i += static_cast<std::size_t>(need);
+      continue;
+    }
+    append_cp(out, cp1251_byte(c));
+    ++i;
+  }
+  return out;
+}
+
+}  // namespace
+
 std::string decode_ifc_string(std::string_view raw) {
   std::string out;
   for (std::size_t i = 0; i < raw.size(); ++i) {
@@ -377,13 +447,15 @@ std::string decode_ifc_string(std::string_view raw) {
       const int hi = hex_value(i + 3 < raw.size() ? raw[i + 3] : '\0');
       const int lo = i + 4 < raw.size() ? hex_value(raw[i + 4]) : -1;
       if (hi >= 0 && lo >= 0) {
-        out.push_back(static_cast<char>((hi << 4) | lo));
+        // ISO 10303-21 \X\hh is one byte in the current code page. The default
+        // page is ISO-8859-1, so the byte is a Unicode code point, not a UTF-8 unit.
+        append_cp(out, static_cast<char32_t>((hi << 4) | lo));
         i += 4;
         continue;
       }
     }
     if (i + 2 < raw.size() && raw[i + 1] == 'S' && raw[i + 2] == '\\' && i + 3 < raw.size()) {
-      out.push_back(static_cast<char>(static_cast<unsigned char>(raw[i + 3]) + 128));
+      append_cp(out, static_cast<char32_t>(static_cast<unsigned char>(raw[i + 3]) + 128));
       i += 3;
       continue;
     }
@@ -394,7 +466,7 @@ std::string decode_ifc_string(std::string_view raw) {
     }
     out.push_back('\\');
   }
-  return out;
+  return sanitize_stored_text(out);
 }
 
 const IfcEntity* IfcFile::find(std::int64_t id) const {

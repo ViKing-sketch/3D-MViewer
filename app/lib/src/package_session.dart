@@ -6,6 +6,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'model.dart';
 import 'sqlite_setup.dart';
+import 'text_bytes.dart';
 import 'zip_store.dart';
 
 class PackageException implements Exception {
@@ -55,6 +56,39 @@ class PackageSession {
     throw PackageException('Путь не найден: $path');
   }
 
+  /// Zip packages are unpacked on a background isolate. A directory is opened
+  /// on the caller, same as [openPath].
+  static Future<PackageSession> openPathAsync(
+    String path, {
+    void Function(int done, int total)? onProgress,
+  }) async {
+    configureSqlite();
+    final entity = FileSystemEntity.typeSync(path);
+    if (entity == FileSystemEntityType.directory) {
+      return _openDirectory(path, deleteOnClose: null, isZip: false);
+    }
+    if (entity == FileSystemEntityType.file) {
+      final temp = Directory.systemTemp.createTempSync('fbvpkg-');
+      try {
+        final hashes = await ZipStore.extractAsync(File(path), temp, onProgress: onProgress);
+        return _openDirectory(
+          temp.path,
+          deleteOnClose: temp,
+          isZip: true,
+          displayPath: path,
+          hashes: hashes,
+        );
+      } on ZipStoreException catch (error) {
+        temp.deleteSync(recursive: true);
+        throw PackageException(error.message);
+      } catch (_) {
+        temp.deleteSync(recursive: true);
+        rethrow;
+      }
+    }
+    throw PackageException('Путь не найден: $path');
+  }
+
   static PackageSession _openDirectory(
     String directory, {
     required Directory? deleteOnClose,
@@ -68,7 +102,7 @@ class PackageSession {
     if (!manifestFile.existsSync()) {
       throw PackageException('В пакете нет manifest.json');
     }
-    final manifest = jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
+    final manifest = jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync())) as Map<String, dynamic>;
     final version = manifest['format_version'];
     if (version != 1) throw PackageException('Неподдерживаемая format_version: $version');
     if (verifyParts) _verifyParts(root, manifest, hashes);
@@ -124,15 +158,15 @@ class PackageSession {
 
   List<SpatialNode> spatial() {
     final rows = _db.select(
-      'SELECT id, parent_id, kind, COALESCE(name, \'\'), elevation FROM spatial ORDER BY id',
+      'SELECT id, parent_id, CAST(kind AS BLOB), CAST(COALESCE(name, \'\') AS BLOB), elevation FROM spatial ORDER BY id',
     );
     return [
       for (final row in rows)
         SpatialNode(
           id: row.columnAt(0) as int,
           parentId: row.columnAt(1) as int? ?? 0,
-          kind: row.columnAt(2) as String,
-          name: row.columnAt(3) as String,
+          kind: packageText(row.columnAt(2)),
+          name: packageText(row.columnAt(3)),
           hasElevation: row.columnAt(4) != null,
           elevation: (row.columnAt(4) as num?)?.toDouble() ?? 0,
         ),
@@ -141,13 +175,14 @@ class PackageSession {
 
   List<ElementInfo> elements() {
     final rows = _db.select('''
-SELECT e.id, COALESCE(e.parent_id, 0), COALESCE(e.storey_id, 0), e.ifc_class,
-       COALESCE(e.name, ''), COALESCE(e.tag, ''), COALESCE(t.name, ''),
-       COALESCE((SELECT m.name FROM material_layers ml
+SELECT e.id, COALESCE(e.parent_id, 0), COALESCE(e.storey_id, 0), CAST(e.ifc_class AS BLOB),
+       CAST(COALESCE(e.name, '') AS BLOB), CAST(COALESCE(e.tag, '') AS BLOB),
+       CAST(COALESCE(t.name, '') AS BLOB),
+       CAST(COALESCE((SELECT m.name FROM material_layers ml
                  JOIN materials m ON m.id = ml.material_id
                  WHERE ml.set_id = e.material_set_id
-                 ORDER BY ml.layer_order LIMIT 1), ''),
-       e.guid
+                 ORDER BY ml.layer_order LIMIT 1), '') AS BLOB),
+       CAST(e.guid AS BLOB)
 FROM elements e
 LEFT JOIN types t ON t.id = e.type_id
 ORDER BY e.id
@@ -158,12 +193,12 @@ ORDER BY e.id
           id: row.columnAt(0) as int,
           parentId: row.columnAt(1) as int,
           storeyId: row.columnAt(2) as int,
-          ifcClass: row.columnAt(3) as String,
-          name: row.columnAt(4) as String,
-          tag: row.columnAt(5) as String,
-          typeName: row.columnAt(6) as String,
-          material: row.columnAt(7) as String,
-          guid: row.columnAt(8) as String,
+          ifcClass: packageText(row.columnAt(3)),
+          name: packageText(row.columnAt(4)),
+          tag: packageText(row.columnAt(5)),
+          typeName: packageText(row.columnAt(6)),
+          material: packageText(row.columnAt(7)),
+          guid: packageText(row.columnAt(8)),
         ),
     ];
   }
@@ -171,7 +206,7 @@ ORDER BY e.id
   List<PropInfo> props(int elementId) {
     final rows = _db.select(
       '''
-SELECT p.name, pr.name, COALESCE(pr.value_text, ''), p.source
+SELECT CAST(p.name AS BLOB), CAST(pr.name AS BLOB), CAST(COALESCE(pr.value_text, '') AS BLOB), CAST(p.source AS BLOB)
 FROM psets p
 JOIN props pr ON pr.pset_id = p.id
 WHERE p.element_id = ?1
@@ -183,10 +218,10 @@ ORDER BY p.id, pr.id
     return [
       for (final row in rows)
         PropInfo(
-          pset: row.columnAt(0) as String,
-          name: row.columnAt(1) as String,
-          valueText: row.columnAt(2) as String,
-          source: row.columnAt(3) as String,
+          pset: packageText(row.columnAt(0)),
+          name: packageText(row.columnAt(1)),
+          valueText: packageText(row.columnAt(2)),
+          source: packageText(row.columnAt(3)),
         ),
     ];
   }
@@ -194,7 +229,7 @@ ORDER BY p.id, pr.id
   List<QuantityInfo> quantities(int elementId) {
     final rows = _db.select(
       '''
-SELECT COALESCE(qset, ''), name, kind, COALESCE(unit, ''), value
+SELECT CAST(COALESCE(qset, '') AS BLOB), CAST(name AS BLOB), CAST(kind AS BLOB), CAST(COALESCE(unit, '') AS BLOB), value
 FROM quantities WHERE element_id = ? ORDER BY id
 ''',
       [elementId],
@@ -202,10 +237,10 @@ FROM quantities WHERE element_id = ? ORDER BY id
     return [
       for (final row in rows)
         QuantityInfo(
-          qset: row.columnAt(0) as String,
-          name: row.columnAt(1) as String,
-          kind: row.columnAt(2) as String,
-          unit: row.columnAt(3) as String,
+          qset: packageText(row.columnAt(0)),
+          name: packageText(row.columnAt(1)),
+          kind: packageText(row.columnAt(2)),
+          unit: packageText(row.columnAt(3)),
           value: (row.columnAt(4) as num).toDouble(),
         ),
     ];
@@ -214,7 +249,7 @@ FROM quantities WHERE element_id = ? ORDER BY id
   List<ClassInfo> classes(int elementId) {
     final rows = _db.select(
       '''
-SELECT COALESCE(system, ''), COALESCE(code, ''), COALESCE(title, '')
+SELECT CAST(COALESCE(system, '') AS BLOB), CAST(COALESCE(code, '') AS BLOB), CAST(COALESCE(title, '') AS BLOB)
 FROM classification WHERE element_id = ? ORDER BY id
 ''',
       [elementId],
@@ -222,17 +257,18 @@ FROM classification WHERE element_id = ? ORDER BY id
     return [
       for (final row in rows)
         ClassInfo(
-          system: row.columnAt(0) as String,
-          code: row.columnAt(1) as String,
-          title: row.columnAt(2) as String,
+          system: packageText(row.columnAt(0)),
+          code: packageText(row.columnAt(1)),
+          title: packageText(row.columnAt(2)),
         ),
     ];
   }
 
   List<SpecRow> specifications() {
     final rows = _db.select('''
-SELECT COALESCE(sp.name, ''), COALESCE(s.ifc_class, ''), COALESCE(s.type_name, ''),
-       COALESCE(s.material_name, ''), s.element_count, s.quantity_kind, s.quantity_sum
+SELECT CAST(COALESCE(sp.name, '') AS BLOB), CAST(COALESCE(s.ifc_class, '') AS BLOB),
+       CAST(COALESCE(s.type_name, '') AS BLOB), CAST(COALESCE(s.material_name, '') AS BLOB),
+       s.element_count, CAST(s.quantity_kind AS BLOB), s.quantity_sum
 FROM spec_views s
 LEFT JOIN spatial sp ON sp.id = s.storey_id
 ORDER BY s.id
@@ -240,12 +276,12 @@ ORDER BY s.id
     return [
       for (final row in rows)
         SpecRow(
-          storeyName: row.columnAt(0) as String,
-          ifcClass: row.columnAt(1) as String,
-          typeName: row.columnAt(2) as String,
-          material: row.columnAt(3) as String,
+          storeyName: packageText(row.columnAt(0)),
+          ifcClass: packageText(row.columnAt(1)),
+          typeName: packageText(row.columnAt(2)),
+          material: packageText(row.columnAt(3)),
           elementCount: row.columnAt(4) as int,
-          quantityKind: row.columnAt(5) as String? ?? '',
+          quantityKind: packageText(row.columnAt(5)),
           quantitySum: (row.columnAt(6) as num?)?.toDouble(),
         ),
     ];

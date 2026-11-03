@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'text_bytes.dart';
+
 /// Element ids stored in glTF node `extras.elementId`.
 ///
 /// Reads only the GLB JSON chunk. The BIN chunk is not copied.
@@ -12,8 +14,18 @@ List<int> glbElementIds(Uint8List bytes) {
   final jsonLength = _u32(bytes, 12);
   final jsonType = _u32(bytes, 16);
   if (jsonType != 0x4E4F534A || 20 + jsonLength > bytes.length) return const [];
-  final text = utf8.decode(bytes.sublist(20, 20 + jsonLength)).trim();
-  final decoded = jsonDecode(text);
+  final String text;
+  try {
+    text = decodePackageBytes(bytes.sublist(20, 20 + jsonLength)).trim();
+  } on FormatException {
+    return const [];
+  }
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(text);
+  } on FormatException {
+    return const [];
+  }
   if (decoded is! Map) return const [];
   final nodes = decoded['nodes'];
   if (nodes is! List) return const [];

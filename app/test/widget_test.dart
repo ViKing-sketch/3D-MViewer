@@ -9,8 +9,11 @@ import 'package:path/path.dart' as p;
 String _repoFile(String relative) => p.normalize(p.join(Directory.current.path, '..', relative));
 
 Future<void> pumpFor(WidgetTester tester, Finder finder) async {
-  for (var i = 0; i < 30; i++) {
-    await tester.pump(const Duration(milliseconds: 50));
+  // Zip open copies on a background isolate. pump() only advances the fake
+  // clock, so give that isolate real time and then rebuild.
+  for (var i = 0; i < 80; i++) {
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
     if (finder.evaluate().isNotEmpty) return;
   }
 }

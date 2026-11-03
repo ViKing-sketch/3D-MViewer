@@ -52,11 +52,25 @@ class S {
   String get viewBottom => russian ? 'Снизу' : 'Bottom';
   String get loadingMesh => russian ? 'Загрузка меша…' : 'Loading mesh…';
 
-  String meshReady(bool lod0, int elementFiles, int drawn) {
+  String extracting(int percent) => russian ? 'Распаковка $percent%' : 'Extracting $percent%';
+
+  String meshReady({
+    required bool lod0,
+    required int elementFiles,
+    required int drawn,
+    bool partial = false,
+    int boxes = 0,
+  }) {
+    if (partial && !lod0) {
+      return russian
+          ? 'Сцена: часть модели, GLB элементов: $elementFiles, боксы: $boxes, в кадре: $drawn'
+          : 'Scene: partial model, element GLBs: $elementFiles, boxes: $boxes, drawn: $drawn';
+    }
     final lod = lod0 ? 'lod0' : (russian ? 'нет lod0' : 'no lod0');
+    final boxText = boxes > 0 ? (russian ? ', боксы: $boxes' : ', boxes: $boxes') : '';
     return russian
-        ? 'Сцена: $lod, GLB элементов: $elementFiles, в кадре: $drawn'
-        : 'Scene: $lod, element GLBs: $elementFiles, drawn: $drawn';
+        ? 'Сцена: $lod, GLB элементов: $elementFiles$boxText, в кадре: $drawn'
+        : 'Scene: $lod, element GLBs: $elementFiles$boxText, drawn: $drawn';
   }
 
   String lengthMm(double metres) {
