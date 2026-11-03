@@ -376,12 +376,16 @@ std::string sanitize_stored_text(std::string_view in) {
       continue;
     }
     int need = 0;
-    if (c >= 0xC2 && c <= 0xDF) need = 2;
-    else if ((c & 0xF0) == 0xE0) need = 3;
-    else if (c >= 0xF0 && c <= 0xF4) need = 4;
+    if (c >= 0xC2 && c <= 0xDF)
+      need = 2;
+    else if ((c & 0xF0) == 0xE0)
+      need = 3;
+    else if (c >= 0xF0 && c <= 0xF4)
+      need = 4;
     bool ok = need > 1 && i + static_cast<std::size_t>(need) <= in.size();
     for (int k = 1; ok && k < need; ++k) {
-      if ((static_cast<unsigned char>(in[i + static_cast<std::size_t>(k)]) & 0xC0) != 0x80) ok = false;
+      if ((static_cast<unsigned char>(in[i + static_cast<std::size_t>(k)]) & 0xC0) != 0x80)
+        ok = false;
     }
     if (ok) {
       out.append(in.substr(i, static_cast<std::size_t>(need)));
