@@ -85,7 +85,7 @@ model.fbvpkg
 
 `mesh/elements/<ElementId>.glb` — тот же элемент отдельным GLB (корень + один узел с тем же `elementId`). Файл обязателен для каждого элемента, у которого `mesh_node` не NULL, и перечислен в `parts`.
 
-Инстансинг `EXT_mesh_gpu_instancing` и LOD1/LOD2 в версии 1 не пишутся (`instancing: false`, `lods: ["lod0"]`). Поля допуска триангуляции сохраняются для будущего `occ2mesh`; аналитический мешер строит точные грани призмы.
+Инстансинг `EXT_mesh_gpu_instancing` и LOD1/LOD2 в версии 1 не пишутся (`instancing: false`, `lods: ["lod0"]`). `mesh.generator` — `analytic-extrusion-v1`, `ifcopenshell-occt` или `ifcopenshell-occt+analytic-extrusion-v1`, если часть элементов добрана аналитическим запасным путём. Допуски триангуляции — аргументы мешера OCCT. `counts.elements_failed` — элементы с представлением, но без меша. `completeness` равен `ok`, если ни один GlobalId IfcElement из прохода IfcOpenShell не потерян.
 
 ## meta.sqlite
 

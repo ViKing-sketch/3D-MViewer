@@ -4,7 +4,8 @@
 
 namespace fbv {
 
-// Future OCCT BRepMesh pipeline (task Z05). The MVP mesher is analytic and does not call this.
+// OCCT triangulation of IFC runs through IfcOpenShell (ifc_geom_mesh.cpp) when
+// FBV_WITH_IFCOPENSHELL is on. This status remains for a direct BRepMesh call.
 struct Occ2MeshStatus {
   bool ok = false;
   std::string error =

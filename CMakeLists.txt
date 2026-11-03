@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
 project(field_bim_viewer VERSION 0.1.0 LANGUAGES C CXX)
 
+# OCCT 7.8.1 and other vendored projects still call cmake_minimum_required() below 3.5.
+# CMake 4 rejects that unless this floor is set. The OCCT superbuild also passes it
+# on its own command line; the environment covers any nested cmake it launches.
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM OR CMAKE_POLICY_VERSION_MINIMUM VERSION_LESS 3.5)
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING
+      "Minimum CMake policy version for bundled third-party projects" FORCE)
+endif()
+set(ENV{CMAKE_POLICY_VERSION_MINIMUM} "${CMAKE_POLICY_VERSION_MINIMUM}")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -9,17 +18,17 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(FBV_BUILD_TESTS "Build unit tests" ON)
-option(FBV_WITH_OCCT "Link Open CASCADE 7.8.1 (not used by the analytic MVP)" OFF)
-option(FBV_WITH_IFCOPENSHELL "Link IfcOpenShell (not used by the analytic MVP)" OFF)
+option(FBV_WITH_OCCT "Build Open CASCADE 7.8.1 (turns on IfcOpenShell)" OFF)
+option(FBV_WITH_IFCOPENSHELL "Mesh IFC with IfcOpenShell's Open CASCADE kernel" OFF)
+set(FBV_SUPERBUILD_JOBS "" CACHE STRING
+    "Parallel compile jobs for the Open CASCADE superbuild (empty = all cores)")
 
 if(FBV_BUILD_TESTS)
   enable_testing()
 endif()
 
-if(FBV_WITH_OCCT OR FBV_WITH_IFCOPENSHELL)
-  message(FATAL_ERROR
-    "FBV_WITH_OCCT and FBV_WITH_IFCOPENSHELL are reserved for the OCCT/IfcOpenShell superbuild. "
-    "The host MVP converter does not link them yet. See deps/CMakeLists.txt.")
+if(FBV_WITH_OCCT AND NOT FBV_WITH_IFCOPENSHELL)
+  set(FBV_WITH_IFCOPENSHELL ON)
 endif()
 
 function(fbv_warnings target)

@@ -8,7 +8,7 @@
 
 ## M0
 
-On-device OCCT не собирался: нет прогона на устройствах и нет отчёта go/no-go. Шаблон измерений лежит в [m0_report.md](m0_report.md). Пресет `android-arm64` требует `ANDROID_NDK_HOME` и в CI не запускается. Superbuild OCCT/IfcOpenShell в `deps/` выключен опциями и в этом прогоне не исполнялся.
+On-device OCCT не собирался: нет прогона на устройствах и нет отчёта go/no-go. Шаблон измерений лежит в [m0_report.md](m0_report.md). Пресет `android-arm64` требует `ANDROID_NDK_HOME` и в CI не запускается. Superbuild OCCT 7.8.1 и IfcOpenShell включается `-DFBV_WITH_IFCOPENSHELL=ON` (пресеты `linux-gcc-ifcopenshell`, `windows-msvc-ifcopenshell`, `windows-vs2026`). Сводка `--stats` / `--json` — бенчмарк хостового мешера в том же файле.
 
 ## ОВ-1 … ОВ-11
 
@@ -28,8 +28,8 @@ On-device OCCT не собирался: нет прогона на устрой�
 
 ## Технические решения реализации
 
-1. **Парсер IFC.** Раскладка атрибутов — IFC4. Заголовок `IFC2X3` и `IFC4X3` принимается, если сущности совпадают с этой раскладкой (продукт, placement, extrusion, pset). Полный IfcOpenShell v0.8 против OCCT 7.8.1 остаётся задачей Z07 и включается будущим `-DFBV_WITH_IFCOPENSHELL`.
-2. **Мешер.** `analytic-extrusion-v1` вместо `occ2mesh`. Булевы вырезания проёмов не вычисляются: элемент без поддерживаемого тела попадает в лог и в SQLite без меша. Заготовки API — `converter/src/occ2mesh.hpp` и `converter/src/xde_import.hpp`.
+1. **Парсер IFC.** Раскладка атрибутов — IFC4, с поправкой на `IfcArbitraryClosedProfileDef` IFC2X3 (кривая профиля без `ProfileName`). В пакет попадает каждый экземпляр с GlobalId и раскладкой IfcElement, а не короткий белый список классов. Заголовок `IFC2X3` и `IFC4X3` принимается.
+2. **Мешер.** При `-DFBV_WITH_IFCOPENSHELL=ON` основной путь — итератор IfcOpenShell v0.8.5 с ядром Open CASCADE 7.8.1 (`ifcopenshell-occt`). Аналитическое выдавливание (`analytic-extrusion-v1`) остаётся запасным путём для элементов, которые итератор не триангулировал. Сборка без IfcOpenShell по-прежнему только аналитическая. Элемент без меша остаётся в SQLite и в логе с причиной; пропуск GlobalId без `--allow-incomplete` не пишет пакет (код 4, FR-C-16). STEP/IGES по-прежнему требуют XDE (`converter/src/xde_import.hpp`). Меши сверх бюджета `--max-memory` (по умолчанию 64 МБ) сбрасываются на диск по элементу, форма OCCT отпускается сразу после триангуляции. Причины предупреждений попадают в JSON как `warning_reasons`. Зависимости Windows — манифест `vcpkg.json`; суперсборка OCCT передаёт `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
 3. **Отдельный GLB на элемент** добавлен к `lod0.glb`, потому что оболочке и отладке нужен один элемент без разбора общего буфера. Это записано в format_version 1.
 4. **B-Rep.** Пока нет OCCT, точная геометрия — AABB в мировых метрах (`analytic-box-v1`), а не BinTools+zstd. Измерения по граням (M3) на этом кодеке не выполняются.
 5. **SQLite** — вендорная amalgamation 3.49.2 (public domain) с `SQLITE_ENABLE_FTS5`, одна и та же на Linux и Windows.

@@ -1,7 +1,11 @@
 #include "scene.hpp"
 
+#include "ifc_geom_mesh.hpp"
+#include "mesh_stream.hpp"
+
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -11,6 +15,23 @@
 #include <unordered_set>
 
 namespace fbv {
+
+void expand_bbox(Element& element, Vec3 point) {
+  if (!element.has_bbox) {
+    element.bbox_min[0] = element.bbox_max[0] = point.x;
+    element.bbox_min[1] = element.bbox_max[1] = point.y;
+    element.bbox_min[2] = element.bbox_max[2] = point.z;
+    element.has_bbox = true;
+    return;
+  }
+  element.bbox_min[0] = std::min(element.bbox_min[0], point.x);
+  element.bbox_min[1] = std::min(element.bbox_min[1], point.y);
+  element.bbox_min[2] = std::min(element.bbox_min[2], point.z);
+  element.bbox_max[0] = std::max(element.bbox_max[0], point.x);
+  element.bbox_max[1] = std::max(element.bbox_max[1], point.y);
+  element.bbox_max[2] = std::max(element.bbox_max[2], point.z);
+}
+
 namespace {
 
 std::string upper_copy(std::string text) {
@@ -59,33 +80,39 @@ std::vector<std::int64_t> refs_of(const IfcValue* value) {
   return out;
 }
 
-bool is_product(const std::string& type) {
-  static const std::unordered_set<std::string> kTypes = {"IFCWALL",
-                                                         "IFCWALLSTANDARDCASE",
-                                                         "IFCSLAB",
-                                                         "IFCSLABSTANDARDCASE",
-                                                         "IFCCOLUMN",
-                                                         "IFCCOLUMNSTANDARDCASE",
-                                                         "IFCBEAM",
-                                                         "IFCDOOR",
-                                                         "IFCDOORSTANDARDCASE",
-                                                         "IFCWINDOW",
-                                                         "IFCWINDOWSTANDARDCASE",
-                                                         "IFCPLATE",
-                                                         "IFCMEMBER",
-                                                         "IFCROOF",
-                                                         "IFCSTAIR",
-                                                         "IFCSTAIRFLIGHT",
-                                                         "IFCRAILING",
-                                                         "IFCCOVERING",
-                                                         "IFCFOOTING",
-                                                         "IFCPILE",
-                                                         "IFCFLOWSEGMENT",
-                                                         "IFCFLOWTERMINAL",
-                                                         "IFCFLOWFITTING",
-                                                         "IFCFLOWCONTROLLER",
-                                                         "IFCBUILDINGELEMENTPROXY"};
-  return kTypes.count(type) != 0;
+bool looks_like_product(const IfcEntity& entity) {
+  const std::string& type = entity.type;
+  if (type.size() < 6 || type.compare(0, 3, "IFC") != 0) return false;
+  if (type.rfind("IFCREL", 0) == 0) return false;
+  if (type.size() >= 4 && type.compare(type.size() - 4, 4, "TYPE") == 0) return false;
+  static const std::unordered_set<std::string> kSpatial = {
+      "IFCPROJECT",
+      "IFCSITE",
+      "IFCBUILDING",
+      "IFCBUILDINGSTOREY",
+      "IFCSPACE",
+      "IFCEXTERNALSPATIALELEMENT",
+      "IFCEXTERNALSPATIALSTRUCTUREELEMENT",
+      "IFCSPATIALZONE",
+      "IFCFACILITY",
+      "IFCFACILITYPART",
+      "IFCBRIDGE",
+      "IFCROAD",
+      "IFCRAILWAY",
+      "IFCMARINEFACILITY",
+  };
+  if (kSpatial.count(type) != 0) return false;
+  // IfcElement layout: GlobalId .. Tag is at least 8 attributes. IfcRoot property
+  // sets and type objects are shorter or end in TYPE and stay out of the element table.
+  if (type.find("REPRESENTATION") != std::string::npos ||
+      type.find("CONTEXT") != std::string::npos || type.find("PROFILE") != std::string::npos)
+    return false;
+  if (entity.attrs.size() < 8) return false;
+  // IfcElement.OwnerHistory is a reference. Geometry contexts store a string there.
+  const IfcValue& history = entity.attrs[1];
+  if (history.kind != IfcValue::Kind::Ref && history.kind != IfcValue::Kind::Null) return false;
+  const IfcValue& guid = entity.attrs[0];
+  return guid.kind == IfcValue::Kind::String && guid.text.size() == 22;
 }
 
 const char* canonical_class(const std::string& type) {
@@ -121,6 +148,13 @@ const char* canonical_class(const std::string& type) {
 
 std::string class_name(const std::string& type) {
   if (const char* name = canonical_class(type)) return name;
+  if (type.size() > 3 && type.compare(0, 3, "IFC") == 0) {
+    std::string rest = type.substr(3);
+    for (char& c : rest) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (!rest.empty())
+      rest[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(rest[0])));
+    return "Ifc" + rest;
+  }
   return type;
 }
 
@@ -335,7 +369,9 @@ bool profile_points(const IfcFile& file, std::int64_t id, double scale, std::vec
     return true;
   }
   if (entity->type == "IFCARBITRARYCLOSEDPROFILEDEF") {
-    const IfcEntity* curve = file.find(ref_at(*entity, 1));
+    // IFC2X3 stores OuterCurve at index 1. IFC4 inserts ProfileName before it.
+    const std::int64_t curve_id = ref_at(*entity, 2) != 0 ? ref_at(*entity, 2) : ref_at(*entity, 1);
+    const IfcEntity* curve = file.find(curve_id);
     if (curve == nullptr || curve->type != "IFCPOLYLINE" || curve->attrs.empty() ||
         curve->attrs[0].kind != IfcValue::Kind::List) {
       why = "arbitrary profile curve is not an IfcPolyline";
@@ -448,22 +484,6 @@ bool mesh_product(const IfcFile& file, const IfcEntity& product, double scale, T
   return false;
 }
 
-void expand_bbox(Element& element, Vec3 point) {
-  if (!element.has_bbox) {
-    element.bbox_min[0] = element.bbox_max[0] = point.x;
-    element.bbox_min[1] = element.bbox_max[1] = point.y;
-    element.bbox_min[2] = element.bbox_max[2] = point.z;
-    element.has_bbox = true;
-    return;
-  }
-  element.bbox_min[0] = std::min(element.bbox_min[0], point.x);
-  element.bbox_min[1] = std::min(element.bbox_min[1], point.y);
-  element.bbox_min[2] = std::min(element.bbox_min[2], point.z);
-  element.bbox_max[0] = std::max(element.bbox_max[0], point.x);
-  element.bbox_max[1] = std::max(element.bbox_max[1], point.y);
-  element.bbox_max[2] = std::max(element.bbox_max[2], point.z);
-}
-
 std::string format_num(double value) {
   char buf[64];
   std::snprintf(buf, sizeof(buf), "%.15g", value);
@@ -574,7 +594,7 @@ std::string last_enum(const IfcEntity& entity) {
 
 }  // namespace
 
-Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_filter) {
+Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std::string& ifc_text) {
   Scene scene;
   scene.schema = file.schema.empty() ? "IFC4" : file.schema;
   bool saw_area = false;
@@ -650,17 +670,11 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
     if (it != spatial_index.end()) node.parent_id = scene.spatial[it->second].id;
   }
 
-  if (!file.typed("IFCOPENINGELEMENT").empty()) {
-    scene.warnings.push_back(
-        "IfcOpeningElement is recorded but not subtracted; the analytic mesher does not evaluate "
-        "booleans");
-  }
-
   std::vector<const IfcEntity*> products;
   for (const auto& entry : file.by_type) {
-    if (!is_product(entry.first)) continue;
     for (std::int64_t id : entry.second) {
-      if (const IfcEntity* entity = file.find(id)) products.push_back(entity);
+      const IfcEntity* entity = file.find(id);
+      if (entity != nullptr && looks_like_product(*entity)) products.push_back(entity);
     }
   }
   std::sort(products.begin(), products.end(),
@@ -692,7 +706,9 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
   std::unordered_map<std::int64_t, std::size_t> element_index;
   for (const IfcEntity* product : products) {
     const std::string nice = class_name(product->type);
-    if (!class_allowed(class_filter, nice) && !class_allowed(class_filter, product->type)) continue;
+    if (!class_allowed(options.class_filter, nice) &&
+        !class_allowed(options.class_filter, product->type))
+      continue;
     Element element;
     element.ifc_id = product->id;
     element.id = static_cast<std::int64_t>(scene.elements.size() + 1);
@@ -700,6 +716,7 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
     element.ifc_class = nice;
     element.name = str_at(*product, 2);
     element.tag = str_at(*product, 7);
+    element.has_representation = ref_at(*product, 6) != 0;
     const auto type_it = element_to_type.find(product->id);
     if (type_it != element_to_type.end()) element.type_ifc = type_it->second;
     set_color(element);
@@ -757,8 +774,8 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
         const IfcEntity* prop_entity = file.find(prop_id);
         if (prop_entity == nullptr || prop_entity->type != "IFCPROPERTYSINGLEVALUE") {
           if (prop_entity != nullptr) {
-            scene.warnings.push_back("skipped " + prop_entity->type + " in property set " +
-                                     pset.name);
+            add_warning(scene, "unsupported_property",
+                        "skipped " + prop_entity->type + " in property set " + pset.name);
           }
           continue;
         }
@@ -804,7 +821,7 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
           value.unit = "kg";
           value.value = raw;
         } else {
-          scene.warnings.push_back("skipped quantity " + quantity->type);
+          add_warning(scene, "unsupported_property", "skipped quantity " + quantity->type);
           continue;
         }
         quantities.push_back(value);
@@ -867,23 +884,72 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
     }
   }
 
+  const auto geometry_started = std::chrono::steady_clock::now();
+  if (options.mesher != "analytic") apply_ifcopenshell_geometry(scene, ifc_text, options);
+  if (!scene.ifcopenshell_ran && !file.typed("IFCOPENINGELEMENT").empty()) {
+    add_warning(scene, "opening_not_subtracted",
+                "IfcOpeningElement is recorded but not subtracted; the analytic mesher does not "
+                "evaluate booleans");
+  }
+
+  bool analytic_used = false;
   for (Element& element : scene.elements) {
+    if (element.has_mesh) continue;
+    if (!element.has_representation) {
+      std::ostringstream line;
+      line << "element " << element.ifc_class << " '" << element.name << "' " << element.guid
+           << " has no representation";
+      add_warning(scene, "no_representation", line.str());
+      remember_failure(scene, element, "no_representation", "has no representation");
+      ++scene.without_geometry;
+      continue;
+    }
     const IfcEntity* product = file.find(element.ifc_id);
     std::string why;
     if (product != nullptr && mesh_product(file, *product, scene.length_scale, element.mesh, why)) {
       element.has_mesh = true;
-      for (std::size_t i = 0; i + 2 < element.mesh.position.size(); i += 3) {
-        expand_bbox(element, {element.mesh.position[i], element.mesh.position[i + 1],
-                              element.mesh.position[i + 2]});
-      }
+      element.mesh_source = "analytic-extrusion-v1";
+      element.geometry_failure.clear();
+      element.failure_reason.clear();
+      commit_mesh(scene, element, options);
+      analytic_used = true;
+      scene.notes.push_back("fallback: " + element.guid + " " + element.ifc_class +
+                            " meshed by analytic-extrusion");
     } else {
+      std::string detail = element.geometry_failure;
+      if (!why.empty()) {
+        if (!detail.empty())
+          detail += "; analytic: " + why;
+        else
+          detail = why;
+      }
+      if (detail.empty()) detail = "no supported solid";
+      const std::string code = classify_geometry_failure(detail);
       std::ostringstream line;
-      line << "element " << element.ifc_class << " '" << element.name
-           << "' has no supported geometry";
-      if (!why.empty()) line << ": " << why;
-      scene.warnings.push_back(line.str());
+      line << "failed: " << element.ifc_class << " '" << element.name << "' " << element.guid
+           << ": " << detail;
+      add_warning(scene, code, line.str());
+      remember_failure(scene, element, code, detail);
+      element.failure_reason = code;
+      ++scene.failed;
     }
   }
+  if (scene.ifcopenshell_ran && analytic_used)
+    scene.mesh_generator = "ifcopenshell-occt+analytic-extrusion-v1";
+  else if (scene.ifcopenshell_ran)
+    scene.mesh_generator = "ifcopenshell-occt";
+  else
+    scene.mesh_generator = "analytic-extrusion-v1";
+
+  for (Element& element : scene.elements) {
+    if (!element.has_mesh) continue;
+    for (std::size_t i = 0; i + 2 < element.mesh.position.size(); i += 3) {
+      expand_bbox(element, {element.mesh.position[i], element.mesh.position[i + 1],
+                            element.mesh.position[i + 2]});
+    }
+  }
+  scene.geometry_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - geometry_started).count();
 
   for (const Element& element : scene.elements) {
     if (!element.has_bbox) continue;
@@ -900,18 +966,37 @@ Scene build_scene(const IfcFile& file, const std::vector<std::string>& class_fil
       }
     }
   }
-  if (scene.has_world) {
-    scene.origin = {scene.world_min[0], scene.world_min[1], scene.world_min[2]};
-    for (Element& element : scene.elements) {
-      if (!element.has_mesh) continue;
-      for (std::size_t i = 0; i < element.mesh.position.size(); i += 3) {
-        element.mesh.position[i] -= scene.origin.x;
-        element.mesh.position[i + 1] -= scene.origin.y;
-        element.mesh.position[i + 2] -= scene.origin.z;
-      }
-    }
-  }
+  if (scene.has_world) scene.origin = {scene.world_min[0], scene.world_min[1], scene.world_min[2]};
   return scene;
+}
+
+void add_warning(Scene& scene, const std::string& code, const std::string& text) {
+  scene.warnings.push_back(text);
+  scene.warning_counts[code] += 1;
+}
+
+void remember_failure(Scene& scene, const Element& element, const std::string& code,
+                      const std::string& detail) {
+  FailureNote note;
+  note.guid = element.guid;
+  note.ifc_class = element.ifc_class;
+  note.reason = code;
+  note.detail = detail.size() > 300 ? detail.substr(0, 300) : detail;
+  scene.failures.push_back(std::move(note));
+}
+
+std::string classify_geometry_failure(const std::string& text) {
+  std::string lower = text;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower.find("boolean") != std::string::npos) return "boolean_failed";
+  if (lower.find("no triangulation") != std::string::npos) return "no_triangulation";
+  if (lower.find("profile") != std::string::npos) return "unsupported_profile";
+  if (lower.find("zero sized") != std::string::npos || lower.find("zero size") != std::string::npos)
+    return "zero_size";
+  if (lower.find("no supported solid") != std::string::npos ||
+      lower.find("unsupported") != std::string::npos)
+    return "unsupported_solid";
+  return "mesher_failed";
 }
 
 }  // namespace fbv
