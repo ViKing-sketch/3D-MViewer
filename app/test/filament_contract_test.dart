@@ -10,10 +10,30 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('sample glbs store extras.elementId in the JSON chunk', () {
-    final root = Directory(p.normalize(p.join(Directory.current.path, '..', 'testdata', 'sample_model', 'mesh')));
-    expect(glbElementIds(_bytes(File(p.join(root.path, 'lod0.glb')))), [1, 2, 3]);
-    expect(glbElementIds(_bytes(File(p.join(root.path, 'elements', '1.glb')))), [1]);
-    expect(glbElementIds(_bytes(File(p.join(root.path, 'elements', '2.glb')))), [2]);
+    final root = Directory(
+      p.normalize(
+        p.join(
+          Directory.current.path,
+          '..',
+          'testdata',
+          'sample_model',
+          'mesh',
+        ),
+      ),
+    );
+    expect(glbElementIds(_bytes(File(p.join(root.path, 'lod0.glb')))), [
+      1,
+      2,
+      3,
+    ]);
+    expect(
+      glbElementIds(_bytes(File(p.join(root.path, 'elements', '1.glb')))),
+      [1],
+    );
+    expect(
+      glbElementIds(_bytes(File(p.join(root.path, 'elements', '2.glb')))),
+      [2],
+    );
     final binOnly = Uint8List(40);
     expect(glbElementIds(binOnly), isEmpty);
   });
@@ -21,20 +41,38 @@ void main() {
   test('filament commands encode selection and visibility', () async {
     const channel = MethodChannel('fbv/filament/test');
     final calls = <MethodCall>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
-      calls.add(call);
-      if (call.method == 'sync') {
-        return {'code': 'ready', 'lod0': true, 'elementFiles': 3, 'drawn': 3};
-      }
-      return null;
-    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'sync') {
+            return {
+              'code': 'ready',
+              'lod0': true,
+              'elementFiles': 3,
+              'drawn': 3,
+            };
+          }
+          return null;
+        });
     final commands = FilamentCommands(channel);
     final status = await commands.sync();
     expect(status?['elementFiles'], 3);
-    await commands.setViewState(selectedId: 2, hidden: const [1], isolated: const [2], xray: true);
+    await commands.setViewState(
+      selectedId: 2,
+      hidden: const [1],
+      isolated: const [2],
+      xray: true,
+    );
     await commands.fit(selected: true);
     await commands.setCamera('top');
-    expect(calls.map((call) => call.method).toList(), ['sync', 'setViewState', 'fit', 'setCamera']);
+    await commands.release();
+    expect(calls.map((call) => call.method).toList(), [
+      'sync',
+      'setViewState',
+      'fit',
+      'setCamera',
+      'release',
+    ]);
     final view = calls[1].arguments as Map<dynamic, dynamic>;
     expect(view['selected'], 2);
     expect(view['hidden'], [1]);

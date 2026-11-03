@@ -3,7 +3,9 @@ package com.fieldbim.field_bim_viewer
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
@@ -42,6 +44,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -61,6 +68,10 @@ class FilamentViewFactory(private val messenger: BinaryMessenger) :
  * source-byte budget. A larger lod0 becomes element GLBs (smallest first)
  * plus box proxies, and selecting a deferred element streams its file.
  * Ready is reported only after [begin]. Picking uses `extras.elementId`.
+ *
+ * The engine lives on the `FbvFilament` thread. A large scene shows clamped
+ * box proxies first, then uploads one GLB per frame. Closing the model
+ * unmaps files and destroys the assets before the page pops.
  */
 class FilamentPlatformView(
     private val context: Context,
@@ -68,25 +79,33 @@ class FilamentPlatformView(
     viewId: Int,
     args: Any?,
 ) : PlatformView, MethodChannel.MethodCallHandler {
-    private val surfaceView = SurfaceView(context)
+    private val surfaceView = SurfaceView(context).apply {
+        isFocusable = false
+        isFocusableInTouchMode = false
+    }
     private val channel = MethodChannel(messenger, "fbv/filament/$viewId")
-    private val main = Handler(Looper.getMainLooper())
+    private val renderThread = HandlerThread("FbvFilament").apply { start() }
+    private val renderHandler = Handler(renderThread.looper)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val generation = AtomicInteger(0)
     private val choreographer = Choreographer.getInstance()
     private val uiHelper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK)
     private val displayHelper = DisplayHelper(context)
+    private val frameQueued = AtomicBoolean(false)
 
-    private val engine: Engine
-    private val renderer: Renderer
-    private val scene: Scene
-    private val view: View
-    private val camera: Camera
-    private val assetLoader: AssetLoader
-    private val resourceLoader: ResourceLoader
-    private val materialProvider: UbershaderProvider
-    private val sun: Int
-    private val fill: Int
-    private val indirect: IndirectLight
-    private val skybox: Skybox
+    private lateinit var engine: Engine
+    private lateinit var renderer: Renderer
+    private lateinit var scene: Scene
+    private lateinit var view: View
+    private lateinit var camera: Camera
+    private lateinit var assetLoader: AssetLoader
+    private lateinit var resourceLoader: ResourceLoader
+    private lateinit var materialProvider: UbershaderProvider
+    private var sun: Int = 0
+    private var fill: Int = 0
+    private lateinit var indirect: IndirectLight
+    private lateinit var skybox: Skybox
+    private var engineAlive = false
     private var xrayMaterial: Material? = null
     private var xrayInstance: MaterialInstance? = null
     private var swapChain: SwapChain? = null
@@ -94,7 +113,10 @@ class FilamentPlatformView(
     private var gesture: GestureDetector? = null
 
     private val assets = ArrayList<FilamentAsset>()
+    private val proxyAssets = HashSet<FilamentAsset>()
+    private val proxyEntities = HashSet<Int>()
     private val streams = ArrayList<FileInputStream>()
+    private val mappedBuffers = ArrayList<MappedByteBuffer>()
     private val elementByEntity = HashMap<Int, Long>()
     private val records = HashMap<Long, ElementGeom>()
     private val originals = HashMap<Int, MaterialInstance>()
@@ -103,6 +125,9 @@ class FilamentPlatformView(
     private val gpuQueue = ArrayList<File>()
     private var activeAsset: FilamentAsset? = null
     private var activeStarted = false
+    private var activeMapped: MappedByteBuffer? = null
+    private var activeStream: FileInputStream? = null
+    private var beginTicket = 0
 
     private var hidden = HashSet<Long>()
     private var isolated = HashSet<Long>()
@@ -121,11 +146,10 @@ class FilamentPlatformView(
     private var downX = 0f
     private var downY = 0f
     private var pointerMoved = false
-    private var loadingRoot: String? = null
-    private var status: Map<String, Any?> = mapOf("code" to "idle")
+    @Volatile private var loadingRoot: String? = null
+    @Volatile private var status: Map<String, Any?> = mapOf("code" to "idle")
     private var reportedReady = false
     private var sceneArmed = false
-    private var loadGeneration = 0
     private var elementFileCount = 0
     private var sawLod0 = false
     private var partialScene = false
@@ -133,17 +157,59 @@ class FilamentPlatformView(
     private var budgetBytes = 96L * 1024 * 1024
     private val deferred = HashMap<Long, File>()
     private val retainedBuffers = ArrayList<ByteBuffer>()
+    private val standInIds = HashSet<Long>()
+    private var uploadsDone = 0
+    private var uploadsTotal = 0
 
     private val frameCallback: Choreographer.FrameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (destroyed) return
             choreographer.postFrameCallback(this)
-            render(frameTimeNanos)
+            if (!frameQueued.compareAndSet(false, true)) return
+            renderHandler.post {
+                frameQueued.set(false)
+                render(frameTimeNanos)
+            }
         }
     }
 
     init {
         ensureFilament()
+        val ready = CountDownLatch(1)
+        var failure: Throwable? = null
+        renderHandler.post {
+            try {
+                createGpu()
+            } catch (error: Throwable) {
+                failure = error
+            } finally {
+                ready.countDown()
+            }
+        }
+        if (!ready.await(15, TimeUnit.SECONDS)) error("Filament engine was not created")
+        failure?.let { throw it }
+        uiHelper.renderCallback = SurfaceCallback()
+        uiHelper.attachTo(surfaceView)
+        surfaceView.setOnTouchListener { _, event ->
+            val copy = MotionEvent.obtain(event)
+            renderHandler.post {
+                try {
+                    onTouch(copy)
+                } finally {
+                    copy.recycle()
+                }
+            }
+            true
+        }
+        channel.setMethodCallHandler(this)
+        choreographer.postFrameCallback(frameCallback)
+        val root = (args as? Map<*, *>)?.get("root") as? String
+        if (!root.isNullOrEmpty()) load(root)
+    }
+
+    override fun getView() = surfaceView
+
+    private fun createGpu() {
         val config = Engine.Config()
         config.driverHandleArenaSizeMB = 32L
         config.perRenderPassArenaSizeMB = 16L
@@ -151,6 +217,7 @@ class FilamentPlatformView(
         config.commandBufferSizeMB = 12L
         config.minCommandBufferSizeMB = 2L
         engine = Engine.Builder().config(config).build()
+        engineAlive = true
         renderer = engine.createRenderer()
         scene = engine.createScene()
         camera = engine.createCamera(EntityManager.get().create())
@@ -187,24 +254,23 @@ class FilamentPlatformView(
         skybox = Skybox.Builder().color(0.83f, 0.87f, 0.91f, 1f).build(engine)
         scene.skybox = skybox
         xrayInstance = loadXray()
-        uiHelper.renderCallback = SurfaceCallback()
-        uiHelper.attachTo(surfaceView)
-        surfaceView.setOnTouchListener { _, event -> onTouch(event) }
-        channel.setMethodCallHandler(this)
-        choreographer.postFrameCallback(frameCallback)
-        val root = (args as? Map<*, *>)?.get("root") as? String
-        if (!root.isNullOrEmpty()) load(root)
     }
-
-    override fun getView() = surfaceView
 
     override fun dispose() {
         if (destroyed) return
         destroyed = true
+        generation.incrementAndGet()
         choreographer.removeFrameCallback(frameCallback)
         channel.setMethodCallHandler(null)
+        surfaceView.setOnTouchListener(null)
         uiHelper.detach()
-        destroyScene()
+        renderHandler.post {
+            try {
+                destroyScene()
+            } finally {
+                renderThread.quitSafely()
+            }
+        }
     }
 
     override fun onMethodCall(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
@@ -215,48 +281,85 @@ class FilamentPlatformView(
                 if (!root.isNullOrEmpty()) load(root)
                 result.success(null)
             }
+            "release" -> releaseScene(result)
             "setViewState" -> {
-                selected = (call.argument<Number>("selected"))?.toLong() ?: 0L
-                hidden = longSet(call.argument<List<*>>("hidden"))
-                isolated = longSet(call.argument<List<*>>("isolated"))
-                xray = call.argument<Boolean>("xray") == true
-                ensureSelected(selected)
-                applyVisibility()
-                if (sceneArmed) pumpQueue()
+                val nextSelected = (call.argument<Number>("selected"))?.toLong() ?: 0L
+                val nextHidden = longSet(call.argument<List<*>>("hidden"))
+                val nextIsolated = longSet(call.argument<List<*>>("isolated"))
+                val nextXray = call.argument<Boolean>("xray") == true
+                renderHandler.post {
+                    if (destroyed) return@post
+                    selected = nextSelected
+                    hidden = nextHidden
+                    isolated = nextIsolated
+                    xray = nextXray
+                    ensureSelected(selected)
+                    applyVisibility()
+                    if (sceneArmed) pumpQueue()
+                }
                 result.success(null)
             }
             "fit" -> {
-                frame(if (call.argument<Boolean>("selected") == true) selectedBox() else allBox(), preset)
+                val selectedFit = call.argument<Boolean>("selected") == true
+                renderHandler.post {
+                    if (destroyed) return@post
+                    frame(if (selectedFit) selectedBox() else allBox(), preset)
+                }
                 result.success(null)
             }
             "setCamera" -> {
-                preset = call.argument<String>("preset") ?: "iso"
-                frame(allBox(), preset)
+                val next = call.argument<String>("preset") ?: "iso"
+                renderHandler.post {
+                    if (destroyed) return@post
+                    preset = next
+                    frame(allBox(), preset)
+                }
                 result.success(null)
             }
             else -> result.notImplemented()
         }
     }
 
+    private fun releaseScene(result: MethodChannel.Result) {
+        generation.incrementAndGet()
+        loadingRoot = null
+        renderHandler.post {
+            try {
+                sceneArmed = false
+                reportedReady = false
+                gpuQueue.clear()
+                if (!destroyed) clearModels()
+            } finally {
+                mainHandler.post {
+                    try {
+                        result.success(null)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
     private fun load(root: String) {
         if (destroyed || loadingRoot == root) return
         loadingRoot = root
-        val ticket = ++loadGeneration
-        reportedReady = false
-        sceneArmed = false
-        gpuQueue.clear()
-        activeAsset = null
-        activeStarted = false
-        setStatus(mapOf("code" to "loading"))
+        val ticket = generation.incrementAndGet()
+        setStatus(mapOf("code" to "loading", "loaded" to 0, "total" to 0))
+        renderHandler.post {
+            if (ticket != generation.get() || destroyed) return@post
+            sceneArmed = false
+            reportedReady = false
+            clearModels()
+        }
         Thread {
             try {
                 val plan = plan(File(root))
-                main.post {
-                    if (!destroyed && ticket == loadGeneration && loadingRoot == root) begin(plan)
+                renderHandler.post {
+                    if (!destroyed && ticket == generation.get() && loadingRoot == root) begin(plan)
                 }
             } catch (error: Exception) {
-                main.post {
-                    if (!destroyed && ticket == loadGeneration) {
+                renderHandler.post {
+                    if (!destroyed && ticket == generation.get()) {
                         setStatus(mapOf("code" to "error", "message" to (error.message ?: "load failed")))
                     }
                 }
@@ -344,10 +447,44 @@ class FilamentPlatformView(
                 if (id !in covered && id !in deferredFiles) proxyIds.add(id)
             }
         }
-        val proxy = ProxyBoxes.build(proxyIds.mapNotNull { geomsZ[it] })
-        val partial = (lod0.isFile && !useLod0) || proxy != null
+        val standIn = proxyIds.toSet()
+        val span = SceneBounds.span(SceneBounds.union(geomsZ.values, standIn))
+        for (id in standIn) {
+            val geom = geomsZ[id] ?: continue
+            val clamped = SceneBounds.clamp(geom, span)
+            geomsZ[id] = clamped
+            geomsU[id] = clamped.upright()
+        }
+        val heavy = geomsZ.size > 80 || (lod0.isFile && lod0Bytes >= 8L * 1024 * 1024)
+        val display = ArrayList<ElementGeom>()
+        if (heavy) {
+            display.addAll(geomsZ.values)
+        } else {
+            for (id in standIn) {
+                val geom = geomsZ[id] ?: continue
+                display.add(geom)
+            }
+        }
+        val proxy = ProxyBoxes.build(display)
+        val partial = (lod0.isFile && !useLod0) || standIn.isNotEmpty()
         if (gpu.isEmpty() && proxy == null) error("mesh/lod0.glb was not found")
-        return LoadPlan(gpu, geomsU, useLod0, elementGlbs.size, partial, proxy?.count ?: 0, budget, deferredFiles, proxy)
+        Log.i(
+            TAG,
+            "plan lod0=$useLod0 files=${gpu.size} standIns=${standIn.size} " +
+                "fitSpan=$span preview=${display.size}",
+        )
+        return LoadPlan(
+            gpu,
+            geomsU,
+            useLod0,
+            elementGlbs.size,
+            partial,
+            standIn.size,
+            budget,
+            deferredFiles,
+            proxy,
+            standIn,
+        )
     }
 
     private fun readGeoms(file: File): List<ElementGeom> {
@@ -359,9 +496,10 @@ class FilamentPlatformView(
     }
 
     private fun begin(plan: LoadPlan) {
+        beginTicket = generation.get()
         clearModels()
-        records.clear()
         records.putAll(plan.geoms)
+        standInIds.addAll(plan.standIn)
         sawLod0 = plan.lod0
         elementFileCount = plan.elementFiles
         partialScene = plan.partial
@@ -371,15 +509,29 @@ class FilamentPlatformView(
         deferred.putAll(plan.deferred)
         gpuQueue.clear()
         gpuQueue.addAll(plan.files)
+        uploadsDone = 0
+        uploadsTotal = plan.files.size
         activeAsset = null
         activeStarted = false
         sceneArmed = true
+        val fit = SceneBounds.union(records.values, standInIds)
+        if (fit != null) {
+            Log.i(
+                TAG,
+                "fit min=${fit[0]},${fit[1]},${fit[2]} max=${fit[3]},${fit[4]},${fit[5]} " +
+                    "elements=${records.size} standIns=${standInIds.size}",
+            )
+        } else {
+            Log.i(TAG, "fit empty elements=${records.size} standIns=${standInIds.size}")
+        }
+        frame(fit, preset)
         val proxy = plan.proxy
         if (proxy != null) {
             retainedBuffers.add(proxy.buffer)
             val asset = openBuffer(proxy.buffer)
-            if (asset != null) startLoad(asset)
+            if (asset != null) startLoad(asset, proxy = true)
         }
+        reportProgress()
         if (activeAsset == null) pumpQueue()
     }
 
@@ -388,9 +540,7 @@ class FilamentPlatformView(
         if (activeAsset != null && activeStarted) {
             val progress = resourceLoader.asyncGetLoadProgress()
             if (progress < 0.999f && progress < 99.9f) return
-            activeAsset?.let { applyRootTurn(it) }
-            activeAsset = null
-            activeStarted = false
+            finishActive()
         }
         if (gpuQueue.isEmpty()) {
             if (!reportedReady) ensureSelected(selected)
@@ -414,16 +564,43 @@ class FilamentPlatformView(
                 return
             }
         }
+        if (destroyed || !sceneArmed || generation.get() != beginTicket) return
         val file = gpuQueue.removeAt(0)
         val asset = openAsset(file)
         if (asset == null) {
             pumpQueue()
             return
         }
-        startLoad(asset)
+        if (!startLoad(asset, proxy = false)) {
+            finishActive()
+            return
+        }
+        uploadsDone += 1
+        if (uploadsDone == 1 || uploadsDone == uploadsTotal || uploadsDone % 8 == 0) reportProgress()
     }
 
-    private fun startLoad(asset: FilamentAsset) {
+    private fun reportProgress() {
+        if (reportedReady) return
+        setStatus(
+            mapOf(
+                "code" to "loading",
+                "loaded" to uploadsDone,
+                "total" to uploadsTotal,
+                "partial" to partialScene,
+                "boxes" to boxCount,
+            ),
+        )
+    }
+
+    private fun startLoad(asset: FilamentAsset, proxy: Boolean): Boolean {
+        if (destroyed || !sceneArmed || generation.get() != beginTicket) {
+            try {
+                assetLoader.destroyAsset(asset)
+            } catch (_: Exception) {
+            }
+            return false
+        }
+        if (proxy) proxyAssets.add(asset)
         assets.add(asset)
         applyRootTurn(asset)
         index(asset)
@@ -432,6 +609,7 @@ class FilamentPlatformView(
         asset.releaseSourceData()
         activeAsset = asset
         activeStarted = true
+        return true
     }
 
     private fun applyRootTurn(asset: FilamentAsset) {
@@ -442,9 +620,27 @@ class FilamentPlatformView(
     private fun ensureSelected(id: Long) {
         if (id == 0L || destroyed || !sceneArmed) return
         val file = deferred[id] ?: return
-        if (file.length() > budgetBytes) return
+        if (file.length() > 128L * 1024 * 1024) {
+            Log.i(TAG, "stream skipped element=$id bytes=${file.length()}")
+            return
+        }
         val ids = deferred.filterValues { it == file }.keys.toList()
         ids.forEach { deferred.remove(it) }
+        Log.i(TAG, "stream element=$id file=${file.name} bytes=${file.length()}")
+        setStatus(
+            mapOf(
+                "code" to if (reportedReady) "ready" else "loading",
+                "lod0" to sawLod0,
+                "elementFiles" to elementFileCount,
+                "drawn" to elementByEntity.size,
+                "partial" to partialScene,
+                "boxes" to boxCount,
+                "budget" to budgetBytes,
+                "lastStreamed" to id,
+                "loaded" to uploadsDone,
+                "total" to uploadsTotal,
+            ),
+        )
         val drop = elementByEntity.filterValues { it in ids }.keys.toList()
         for (entity in drop) {
             if (inScene.remove(entity)) scene.remove(entity)
@@ -458,13 +654,75 @@ class FilamentPlatformView(
         val input = FileInputStream(file)
         streams.add(input)
         val mapped = input.channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0, input.channel.size())
-        val asset = assetLoader.createAsset(mapped as ByteBuffer)
+        mappedBuffers.add(mapped)
+        activeStream = input
+        activeMapped = mapped
+        val asset = try {
+            assetLoader.createAsset(mapped)
+        } catch (error: Exception) {
+            Log.w(TAG, "createAsset failed: ${error.message}")
+            null
+        }
         if (asset == null) {
-            input.close()
+            mappedBuffers.remove(mapped)
+            unmap(mapped)
+            if (activeMapped === mapped) activeMapped = null
+            try {
+                input.close()
+            } catch (_: Exception) {
+            }
             streams.remove(input)
+            if (activeStream === input) activeStream = null
             return null
         }
         return asset
+    }
+
+    private fun finishActive() {
+        activeAsset?.let { applyRootTurn(it) }
+        activeAsset = null
+        activeStarted = false
+        val mapped = activeMapped
+        activeMapped = null
+        if (mapped != null) {
+            mappedBuffers.remove(mapped)
+            unmap(mapped)
+        }
+        val stream = activeStream
+        activeStream = null
+        if (stream != null) {
+            streams.remove(stream)
+            try {
+                stream.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun unmap(buffer: ByteBuffer) {
+        if (buffer !is MappedByteBuffer) return
+        try {
+            val method = Class.forName("sun.nio.ch.FileChannelImpl")
+                .getDeclaredMethod("unmap", MappedByteBuffer::class.java)
+            method.isAccessible = true
+            method.invoke(null, buffer)
+            return
+        } catch (_: Throwable) {
+        }
+        try {
+            val unsafeClass = Class.forName("sun.misc.Unsafe")
+            val field = unsafeClass.getDeclaredField("theUnsafe")
+            field.isAccessible = true
+            val unsafe = field.get(null)
+            unsafeClass.getMethod("invokeCleaner", ByteBuffer::class.java).invoke(unsafe, buffer)
+            return
+        } catch (_: Throwable) {
+        }
+        try {
+            val cleaner = buffer.javaClass.getMethod("cleaner").invoke(buffer) ?: return
+            cleaner.javaClass.getMethod("clean").invoke(cleaner)
+        } catch (_: Throwable) {
+        }
     }
 
     private fun openBuffer(buffer: ByteBuffer): FilamentAsset? {
@@ -474,10 +732,50 @@ class FilamentPlatformView(
     }
 
     private fun index(asset: FilamentAsset) {
+        val found = ArrayList<Long>()
+        val proxy = asset in proxyAssets
         for (entity in asset.entities) {
             if (entity == 0 || elementByEntity.containsKey(entity)) continue
             val id = elementId(asset.getExtras(entity)) ?: asset.getName(entity)?.toLongOrNull()
-            if (id != null && id != 0L) elementByEntity[entity] = id
+            if (id != null && id != 0L) {
+                elementByEntity[entity] = id
+                if (proxy) proxyEntities.add(entity) else found.add(id)
+            }
+        }
+        if (!proxy) retireProxies(found)
+        releaseRetiredProxies()
+    }
+
+    /** Drop the preview asset once every stand-in has a real mesh. */
+    private fun releaseRetiredProxies() {
+        if (!engineAlive || proxyEntities.isNotEmpty() || proxyAssets.isEmpty()) return
+        val drop = proxyAssets.filter { it != activeAsset }
+        if (drop.isEmpty()) return
+        for (asset in drop) {
+            assets.remove(asset)
+            try {
+                scene.removeEntities(asset.entities)
+                assetLoader.destroyAsset(asset)
+            } catch (_: Exception) {
+            }
+        }
+        proxyAssets.removeAll(drop.toSet())
+        if (proxyAssets.isEmpty()) retainedBuffers.clear()
+        Log.i(TAG, "released preview proxies=${drop.size}")
+    }
+
+    private fun retireProxies(ids: Collection<Long>) {
+        if (ids.isEmpty() || proxyEntities.isEmpty()) return
+        val wanted = ids.toHashSet()
+        val drop = ArrayList<Int>()
+        for ((entity, id) in elementByEntity) {
+            if (entity in proxyEntities && id in wanted) drop.add(entity)
+        }
+        for (entity in drop) {
+            if (inScene.remove(entity)) scene.remove(entity)
+            elementByEntity.remove(entity)
+            originals.remove(entity)
+            proxyEntities.remove(entity)
         }
     }
 
@@ -530,22 +828,27 @@ class FilamentPlatformView(
     }
 
     private fun populate() {
+        val snapshot = assets.toList()
         var added = false
-        for (asset in assets) {
-            var count = asset.popRenderables(readyRenderables)
-            while (count > 0) {
-                for (i in 0 until count) indexEntity(asset, readyRenderables[i])
-                added = true
-                count = asset.popRenderables(readyRenderables)
-            }
+        for (asset in snapshot) {
+            if (asset !in assets) continue
+            val count = asset.popRenderables(readyRenderables)
+            if (count <= 0) continue
+            for (i in 0 until count) indexEntity(asset, readyRenderables[i])
+            added = true
+            break
         }
         if (added) applyVisibility()
+        releaseRetiredProxies()
     }
 
     private fun indexEntity(asset: FilamentAsset, entity: Int) {
         if (entity == 0 || elementByEntity.containsKey(entity)) return
         val id = elementId(asset.getExtras(entity)) ?: asset.getName(entity)?.toLongOrNull()
-        if (id != null && id != 0L) elementByEntity[entity] = id
+        if (id != null && id != 0L) {
+            elementByEntity[entity] = id
+            if (asset in proxyAssets) proxyEntities.add(entity) else retireProxies(listOf(id))
+        }
     }
 
     private fun applyVisibility() {
@@ -619,21 +922,8 @@ class FilamentPlatformView(
     }
 
     private fun allBox(): FloatArray? {
-        if (records.isEmpty()) {
-            return floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
-        }
-        var minX = Float.POSITIVE_INFINITY
-        var minY = Float.POSITIVE_INFINITY
-        var minZ = Float.POSITIVE_INFINITY
-        var maxX = Float.NEGATIVE_INFINITY
-        var maxY = Float.NEGATIVE_INFINITY
-        var maxZ = Float.NEGATIVE_INFINITY
-        for (geom in records.values) {
-            minX = minOf(minX, geom.min[0]); minY = minOf(minY, geom.min[1]); minZ = minOf(minZ, geom.min[2])
-            maxX = maxOf(maxX, geom.max[0]); maxY = maxOf(maxY, geom.max[1]); maxZ = maxOf(maxZ, geom.max[2])
-        }
-        if (minX == Float.POSITIVE_INFINITY) return null
-        return floatArrayOf(minX, minY, minZ, maxX, maxY, maxZ)
+        return SceneBounds.union(records.values, standInIds)
+            ?: floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
     }
 
     private fun selectedBox(): FloatArray? {
@@ -648,6 +938,7 @@ class FilamentPlatformView(
     }
 
     private fun onTouch(event: MotionEvent): Boolean {
+        if (!engineAlive || destroyed) return true
         gesture?.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -673,12 +964,18 @@ class FilamentPlatformView(
         if (width <= 1 || height <= 1) return
         val px = (vp.left + x.toInt()).coerceIn(vp.left, vp.left + width - 1)
         val py = (vp.bottom + height - y.toInt()).coerceIn(vp.bottom, vp.bottom + height - 1)
-        view.pick(px, py, main, View.OnPickCallback { result ->
+        view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
             val id = elementByEntity[result.renderable] ?: 0L
-            try {
-                channel.invokeMethod("onPick", mapOf("elementId" to id))
-            } catch (_: Exception) {
+            if (id != 0L && deferred.containsKey(id)) {
+                ensureSelected(id)
+                if (sceneArmed) pumpQueue()
+            }
+            mainHandler.post {
+                try {
+                    channel.invokeMethod("onPick", mapOf("elementId" to id))
+                } catch (_: Exception) {
+                }
             }
         })
     }
@@ -701,18 +998,38 @@ class FilamentPlatformView(
 
     private fun setStatus(value: Map<String, Any?>) {
         status = value
-        try {
-            channel.invokeMethod("onStatus", value)
-        } catch (_: Exception) {
+        mainHandler.post {
+            try {
+                channel.invokeMethod("onStatus", value)
+            } catch (_: Exception) {
+            }
         }
     }
 
     private fun clearModels() {
+        if (!engineAlive) return
+        val assetCount = assets.size
+        val mapCount = mappedBuffers.size
+        try {
+            resourceLoader.asyncCancelLoad()
+        } catch (_: Exception) {
+        }
+        activeAsset = null
+        activeStarted = false
+        gpuQueue.clear()
         for (asset in assets) {
-            scene.removeEntities(asset.entities)
-            assetLoader.destroyAsset(asset)
+            try {
+                scene.removeEntities(asset.entities)
+                assetLoader.destroyAsset(asset)
+            } catch (_: Exception) {
+            }
         }
         assets.clear()
+        proxyAssets.clear()
+        proxyEntities.clear()
+        val maps = ArrayList(mappedBuffers)
+        mappedBuffers.clear()
+        for (buffer in maps) unmap(buffer)
         for (stream in streams) {
             try {
                 stream.close()
@@ -724,14 +1041,28 @@ class FilamentPlatformView(
         originals.clear()
         inScene.clear()
         retainedBuffers.clear()
+        records.clear()
+        deferred.clear()
+        standInIds.clear()
+        activeMapped = null
+        activeStream = null
         framed = false
+        try {
+            engine.flushAndWait()
+        } catch (_: Exception) {
+        }
+        Log.i(TAG, "released assets=$assetCount maps=$mapCount")
     }
 
     private fun destroyScene() {
+        if (!engineAlive) return
         try {
             clearModels()
             xrayInstance = null
             xrayMaterial?.let { engine.destroyMaterial(it) }
+            xrayMaterial = null
+            scene.indirectLight = null
+            scene.skybox = null
             engine.destroyIndirectLight(indirect)
             engine.destroySkybox(skybox)
             engine.destroyEntity(sun)
@@ -741,6 +1072,7 @@ class FilamentPlatformView(
             materialProvider.destroy()
             resourceLoader.destroy()
             swapChain?.let { engine.destroySwapChain(it) }
+            swapChain = null
             engine.destroyRenderer(renderer)
             engine.destroyView(view)
             engine.destroyScene(scene)
@@ -748,8 +1080,13 @@ class FilamentPlatformView(
             EntityManager.get().destroy(camera.entity)
             EntityManager.get().destroy(sun)
             EntityManager.get().destroy(fill)
+            engine.flushAndWait()
             engine.destroy()
-        } catch (_: Exception) {
+            Log.i(TAG, "destroyed filament engine")
+        } catch (error: Exception) {
+            Log.w(TAG, "destroy failed: ${error.message}")
+        } finally {
+            engineAlive = false
         }
     }
 
@@ -761,28 +1098,35 @@ class FilamentPlatformView(
 
     private inner class SurfaceCallback : UiHelper.RendererCallback {
         override fun onNativeWindowChanged(surface: Surface) {
-            if (destroyed) return
-            swapChain?.let { engine.destroySwapChain(it) }
-            swapChain = engine.createSwapChain(surface)
-            surfaceView.display?.let { displayHelper.attach(renderer, it) }
+            val display = surfaceView.display
+            renderHandler.post {
+                if (destroyed || !engineAlive) return@post
+                swapChain?.let { engine.destroySwapChain(it) }
+                swapChain = engine.createSwapChain(surface)
+                if (display != null) displayHelper.attach(renderer, display)
+            }
         }
 
         override fun onDetachedFromSurface() {
             displayHelper.detach()
-            swapChain?.let {
-                engine.destroySwapChain(it)
-                engine.flushAndWait()
-                swapChain = null
+            renderHandler.post {
+                if (!engineAlive) return@post
+                swapChain?.let {
+                    engine.destroySwapChain(it)
+                    engine.flushAndWait()
+                    swapChain = null
+                }
             }
         }
 
         override fun onResized(width: Int, height: Int) {
-            viewportW = width.coerceAtLeast(1)
-            viewportH = height.coerceAtLeast(1)
-            view.viewport = Viewport(0, 0, viewportW, viewportH)
-            manipulator?.setViewport(viewportW, viewportH)
-            updateProjection()
-            if (!destroyed) {
+            renderHandler.post {
+                if (destroyed || !engineAlive) return@post
+                viewportW = width.coerceAtLeast(1)
+                viewportH = height.coerceAtLeast(1)
+                view.viewport = Viewport(0, 0, viewportW, viewportH)
+                manipulator?.setViewport(viewportW, viewportH)
+                updateProjection()
                 val fence = engine.createFence()
                 fence.wait(Fence.Mode.FLUSH, Fence.WAIT_FOR_EVER)
                 engine.destroyFence(fence)
@@ -791,6 +1135,7 @@ class FilamentPlatformView(
     }
 
     companion object {
+        private const val TAG = "FbvFilament"
         private val HIGHLIGHT = floatArrayOf(1f, 0.45f, 0.08f, 1f)
 
         /** Column-major (x, y, z) -> (x, z, -y). */
@@ -823,4 +1168,5 @@ private data class LoadPlan(
     val budget: Long,
     val deferred: Map<Long, File>,
     val proxy: ProxyGlb?,
+    val standIn: Set<Long>,
 )

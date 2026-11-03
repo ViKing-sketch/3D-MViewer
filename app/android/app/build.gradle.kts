@@ -62,6 +62,7 @@ dependencies {
     implementation("com.google.android.filament:filament-android:$filament")
     implementation("com.google.android.filament:filament-utils-android:$filament")
     implementation("com.google.android.filament:gltfio-android:$filament")
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin {

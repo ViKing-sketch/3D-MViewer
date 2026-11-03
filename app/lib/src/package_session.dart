@@ -17,7 +17,13 @@ class PackageException implements Exception {
 }
 
 class PackageSession {
-  PackageSession._(this.summary, this._db, this._temp, this.manifest, this.rootPath);
+  PackageSession._(
+    this.summary,
+    this._db,
+    this._temp,
+    this.manifest,
+    this.rootPath,
+  );
 
   final PackageSummary summary;
   final Database _db;
@@ -61,6 +67,7 @@ class PackageSession {
   static Future<PackageSession> openPathAsync(
     String path, {
     void Function(int done, int total)? onProgress,
+    void Function(void Function() cancel)? onCancel,
   }) async {
     configureSqlite();
     final entity = FileSystemEntity.typeSync(path);
@@ -70,7 +77,12 @@ class PackageSession {
     if (entity == FileSystemEntityType.file) {
       final temp = Directory.systemTemp.createTempSync('fbvpkg-');
       try {
-        final hashes = await ZipStore.extractAsync(File(path), temp, onProgress: onProgress);
+        final hashes = await ZipStore.extractAsync(
+          File(path),
+          temp,
+          onProgress: onProgress,
+          onCancel: onCancel,
+        );
         return _openDirectory(
           temp.path,
           deleteOnClose: temp,
@@ -102,18 +114,28 @@ class PackageSession {
     if (!manifestFile.existsSync()) {
       throw PackageException('В пакете нет manifest.json');
     }
-    final manifest = jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync())) as Map<String, dynamic>;
+    final manifest =
+        jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync()))
+            as Map<String, dynamic>;
     final version = manifest['format_version'];
-    if (version != 1) throw PackageException('Неподдерживаемая format_version: $version');
+    if (version != 1) {
+      throw PackageException('Неподдерживаемая format_version: $version');
+    }
     if (verifyParts) _verifyParts(root, manifest, hashes);
-    final db = sqlite3.open(p.join(root.path, 'meta.sqlite'), mode: OpenMode.readOnly);
-    final count = db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
+    final db = sqlite3.open(
+      p.join(root.path, 'meta.sqlite'),
+      mode: OpenMode.readOnly,
+    );
+    final count =
+        db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
     final source = (manifest['source'] as Map?) ?? const {};
     final bytes = _partBytes(manifest);
     return PackageSession._(
       PackageSummary(
         path: displayPath ?? root.path,
-        name: (manifest['name'] as String?) ?? p.basename(displayPath ?? root.path),
+        name:
+            (manifest['name'] as String?) ??
+            p.basename(displayPath ?? root.path),
         schema: (source['schema'] as String?) ?? '',
         elementCount: count,
         bytes: bytes,
@@ -136,13 +158,17 @@ class PackageSession {
     for (final entry in parts.entries) {
       final name = entry.key.toString().replaceAll('\\', '/');
       final file = File(p.joinAll([root.path, ...name.split('/')]));
-      if (!file.existsSync()) throw PackageException('Нет части пакета ${entry.key}');
+      if (!file.existsSync()) {
+        throw PackageException('Нет части пакета ${entry.key}');
+      }
       final meta = entry.value;
       if (meta is! Map) continue;
       final expected = meta['sha256']?.toString() ?? '';
       if (expected.isEmpty) continue;
       final actual = hashes?[name] ?? ZipStore.hashFile(file);
-      if (actual != expected) throw PackageException('Хэш не совпал: ${entry.key}');
+      if (actual != expected) {
+        throw PackageException('Хэш не совпал: ${entry.key}');
+      }
     }
   }
 
@@ -151,7 +177,9 @@ class PackageSession {
     if (parts is! Map) return 0;
     var sum = 0;
     for (final value in parts.values) {
-      if (value is Map && value['bytes'] is num) sum += (value['bytes'] as num).toInt();
+      if (value is Map && value['bytes'] is num) {
+        sum += (value['bytes'] as num).toInt();
+      }
     }
     return sum;
   }
@@ -287,9 +315,16 @@ ORDER BY s.id
     ];
   }
 
+  var _closed = false;
+
   void close() {
+    if (_closed) return;
+    _closed = true;
     _db.dispose();
-    _temp?.deleteSync(recursive: true);
+    final temp = _temp;
+    if (temp != null && temp.existsSync()) {
+      temp.deleteSync(recursive: true);
+    }
   }
 }
 
@@ -299,7 +334,8 @@ List<PackageSummary> scanLibrary(String directory) {
   if (!root.existsSync()) return const [];
   final found = <PackageSummary>[];
   for (final entity in root.listSync(followLinks: false)) {
-    if (entity is Directory && File(p.join(entity.path, 'manifest.json')).existsSync()) {
+    if (entity is Directory &&
+        File(p.join(entity.path, 'manifest.json')).existsSync()) {
       try {
         final session = PackageSession._openDirectory(
           entity.path,
@@ -312,12 +348,17 @@ List<PackageSummary> scanLibrary(String directory) {
       } on PackageException {
         continue;
       }
-    } else if (entity is File && entity.path.toLowerCase().endsWith('.fbvpkg')) {
+    } else if (entity is File &&
+        entity.path.toLowerCase().endsWith('.fbvpkg')) {
       Directory? temp;
       try {
         temp = Directory.systemTemp.createTempSync('fbvscan-');
         // Listing a library must not unpack meshes. Integrity is checked on open.
-        ZipStore.extract(entity, temp, only: const {'manifest.json', 'meta.sqlite'});
+        ZipStore.extract(
+          entity,
+          temp,
+          only: const {'manifest.json', 'meta.sqlite'},
+        );
         final session = PackageSession._openDirectory(
           temp.path,
           deleteOnClose: temp,

@@ -19,6 +19,12 @@ class FilamentCommands {
     return channel.invokeMethod<void>('load', {'root': root});
   }
 
+  /// Drops the GPU scene, mapped files and the in-flight upload. The engine
+  /// stays until the platform view is disposed.
+  Future<void> release() {
+    return channel.invokeMethod<void>('release');
+  }
+
   Future<void> setViewState({
     required int? selectedId,
     required List<int> hidden,

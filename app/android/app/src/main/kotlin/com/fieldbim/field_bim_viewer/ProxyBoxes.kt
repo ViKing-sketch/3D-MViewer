@@ -63,7 +63,9 @@ object ProxyBoxes {
             val tx = (geom.min[0] + geom.max[0]) * 0.5f
             val ty = (geom.min[1] + geom.max[1]) * 0.5f
             val tz = (geom.min[2] + geom.max[2]) * 0.5f
-            nodes.append("{\"mesh\":0,\"extras\":{\"elementId\":")
+            nodes.append("{\"mesh\":0,\"name\":\"")
+            nodes.append(geom.id)
+            nodes.append("\",\"extras\":{\"elementId\":")
             nodes.append(geom.id)
             nodes.append("},\"matrix\":[")
             nodes.append(sx).append(",0,0,0,0,")

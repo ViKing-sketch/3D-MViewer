@@ -19,7 +19,8 @@ class ModelPage extends StatefulWidget {
   State<ModelPage> createState() => _ModelPageState();
 }
 
-class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMixin {
+class _ModelPageState extends State<ModelPage>
+    with SingleTickerProviderStateMixin {
   PackageSession? _session;
   List<SpatialNode> _spatial = const [];
   List<ElementInfo> _elements = const [];
@@ -33,8 +34,12 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
   bool _xray = false;
   int _renderRevision = 0;
   bool _opening = false;
+  bool _closing = false;
+  bool _left = false;
+  bool _cancel = false;
   int _extractDone = 0;
   int _extractTotal = 0;
+  void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
   late final TabController _tabs;
 
@@ -68,14 +73,18 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
       final session = await PackageSession.openPathAsync(
         widget.path,
         onProgress: (done, total) {
-          if (!mounted) return;
+          if (!mounted || _cancel) return;
           setState(() {
             _extractDone = done;
             _extractTotal = total;
           });
         },
+        onCancel: (cancel) {
+          _cancelExtract = cancel;
+          if (_cancel) cancel();
+        },
       );
-      if (!mounted) {
+      if (_cancel || _left || !mounted) {
         session.close();
         return;
       }
@@ -87,7 +96,7 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
         _opening = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (_cancel || _left || !mounted) return;
       setState(() {
         _error = error.toString();
         _opening = false;
@@ -95,8 +104,28 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
     }
   }
 
+  /// System back and the app bar both come here. The route stays up until the
+  /// GPU scene is released, so the extracted files are not deleted while a
+  /// mapped GLB is still in use.
+  Future<void> _leave() async {
+    if (_left || _closing) return;
+    if (!mounted || !Navigator.of(context).canPop()) return;
+    setState(() => _closing = true);
+    _cancel = true;
+    _cancelExtract?.call();
+    try {
+      await _viewport.currentState?.release();
+    } catch (_) {}
+    _session?.close();
+    _session = null;
+    _left = true;
+    if (mounted) Navigator.of(context).pop();
+  }
+
   @override
   void dispose() {
+    _cancel = true;
+    _cancelExtract?.call();
     _tabs.dispose();
     _session?.close();
     super.dispose();
@@ -173,18 +202,42 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         children: [
-          TextButton(onPressed: () => _viewport.currentState?.fitAll(), child: Text(strings.fitAll)),
-          TextButton(onPressed: () => _viewport.currentState?.fitSelected(), child: Text(strings.fitSelected)),
+          TextButton(
+            onPressed: () => _viewport.currentState?.fitAll(),
+            child: Text(strings.fitAll),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.fitSelected(),
+            child: Text(strings.fitSelected),
+          ),
           TextButton(onPressed: _hideSelected, child: Text(strings.hide)),
           TextButton(onPressed: _showAll, child: Text(strings.showAll)),
           TextButton(onPressed: _isolateSelected, child: Text(strings.isolate)),
           TextButton(onPressed: _toggleXray, child: Text(strings.xray)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('front'), child: Text(strings.viewFront)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('back'), child: Text(strings.viewBack)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('left'), child: Text(strings.viewLeft)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('right'), child: Text(strings.viewRight)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('top'), child: Text(strings.viewTop)),
-          TextButton(onPressed: () => _viewport.currentState?.setCamera('bottom'), child: Text(strings.viewBottom)),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('front'),
+            child: Text(strings.viewFront),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('back'),
+            child: Text(strings.viewBack),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('left'),
+            child: Text(strings.viewLeft),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('right'),
+            child: Text(strings.viewRight),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('top'),
+            child: Text(strings.viewTop),
+          ),
+          TextButton(
+            onPressed: () => _viewport.currentState?.setCamera('bottom'),
+            child: Text(strings.viewBottom),
+          ),
         ],
       ),
     );
@@ -193,35 +246,71 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     final strings = widget.strings;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_session?.summary.name ?? strings.appTitle),
-        bottom: TabBar(
-          controller: _tabs,
-          tabs: [
-            Tab(text: strings.library),
-            Tab(text: strings.specification),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_leave());
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: BackButton(onPressed: () => unawaited(_leave())),
+          automaticallyImplyLeading: false,
+          title: Text(_session?.summary.name ?? strings.appTitle),
+          bottom: TabBar(
+            controller: _tabs,
+            tabs: [
+              Tab(text: strings.library),
+              Tab(text: strings.specification),
+            ],
+          ),
+        ),
+        floatingActionButton: const AppearanceButtons(tag: 'model'),
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: _error != null
+                  ? Center(child: Text(_error!))
+                  : _opening || _session == null
+                  ? _extracting(strings)
+                  : TabBarView(
+                      controller: _tabs,
+                      children: [_modelTab(context), _specTab(context)],
+                    ),
+            ),
+            if (_closing)
+              const Positioned.fill(
+                child: ModalBarrier(
+                  dismissible: false,
+                  color: Color(0x66000000),
+                ),
+              ),
+            if (_closing)
+              Center(
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 12),
+                        Text(strings.closingModel),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
-      floatingActionButton: const AppearanceButtons(tag: 'model'),
-      body: _error != null
-          ? Center(child: Text(_error!))
-          : _opening || _session == null
-              ? _extracting(strings)
-              : TabBarView(
-                  controller: _tabs,
-                  children: [
-                    _modelTab(context),
-                    _specTab(context),
-                  ],
-                ),
     );
   }
 
   Widget _extracting(S strings) {
     final total = _extractTotal;
-    final percent = total <= 0 ? 0 : (100 * _extractDone / total).round().clamp(0, 100);
+    final percent = total <= 0
+        ? 0
+        : (100 * _extractDone / total).round().clamp(0, 100);
     final value = total <= 0 ? null : (_extractDone / total).clamp(0.0, 1.0);
     return Center(
       child: Padding(
@@ -306,7 +395,12 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
                   ? Stack(
                       children: [
                         Positioned.fill(child: filament),
-                        Positioned(left: 0, right: 0, bottom: 0, child: _renderBar(strings)),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: _renderBar(strings),
+                        ),
                       ],
                     )
                   : Column(
@@ -345,7 +439,9 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
     return ListView(
       children: [
         for (final node in roots) _spatialTile(node),
-        for (final element in _elements.where((e) => e.parentId == 0 && _visible(e)))
+        for (final element in _elements.where(
+          (e) => e.parentId == 0 && _visible(e),
+        ))
           _elementTile(element),
       ],
     );
@@ -353,7 +449,9 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
 
   Widget _spatialTile(SpatialNode node) {
     final children = _spatial.where((item) => item.parentId == node.id);
-    final elements = _elements.where((item) => item.parentId == node.id && _visible(item));
+    final elements = _elements.where(
+      (item) => item.parentId == node.id && _visible(item),
+    );
     return ExpansionTile(
       initiallyExpanded: true,
       title: Text(node.name.isEmpty ? node.kind : node.name),
@@ -387,7 +485,10 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        Text(strings.properties, style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          strings.properties,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         Text(element.guid),
         if (element.tag.isNotEmpty) Text(element.tag),
         if (element.typeName.isNotEmpty) Text(element.typeName),
@@ -401,7 +502,10 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
             trailing: Text(_displayValue(prop.valueText)),
           ),
         if (quantities.isNotEmpty) ...[
-          Text(strings.quantities, style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            strings.quantities,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           for (final quantity in quantities)
             ListTile(
               minTileHeight: 48,
@@ -411,7 +515,10 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
             ),
         ],
         if (classes.isNotEmpty) ...[
-          Text(strings.classification, style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            strings.classification,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           for (final item in classes)
             ListTile(
               minTileHeight: 48,
@@ -481,6 +588,8 @@ class _ModelPageState extends State<ModelPage> with SingleTickerProviderStateMix
     );
     await file.writeAsString(specCsv(_specs));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(file.path)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(file.path)));
   }
 }

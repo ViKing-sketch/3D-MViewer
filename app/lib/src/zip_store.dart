@@ -104,6 +104,7 @@ class ZipStore {
     Directory dest, {
     Set<String>? only,
     void Function(int done, int total)? onProgress,
+    void Function(void Function() cancel)? onCancel,
   }) async {
     final receive = ReceivePort();
     final errors = ReceivePort();
@@ -118,20 +119,31 @@ class ZipStore {
       errors.close();
     }
 
+    void cancel() {
+      if (!completer.isCompleted) {
+        completer.completeError(ZipStoreException('cancelled'));
+      }
+      finish();
+    }
+
     receive.listen((message) {
       if (message is List && message.isNotEmpty && message.first == 'p') {
         onProgress?.call(message[1] as int, message[2] as int);
         return;
       }
       if (message is List && message.isNotEmpty && message.first == 'ok') {
-        final hashes = (message[1] as Map).map((key, value) => MapEntry('$key', '$value'));
+        final hashes = (message[1] as Map).map(
+          (key, value) => MapEntry('$key', '$value'),
+        );
         if (!completer.isCompleted) completer.complete(hashes);
         finish();
       }
     });
     errors.listen((message) {
       if (completer.isCompleted) return;
-      final text = message is List && message.isNotEmpty ? message.first.toString() : '$message';
+      final text = message is List && message.isNotEmpty
+          ? message.first.toString()
+          : '$message';
       completer.completeError(ZipStoreException(text));
       finish();
     });
@@ -141,6 +153,7 @@ class ZipStore {
       onError: errors.sendPort,
     );
     spawned.add(isolate);
+    onCancel?.call(cancel);
     if (completer.isCompleted) finish();
     return completer.future;
   }
@@ -154,7 +167,9 @@ class ZipStore {
       while (true) {
         final read = raf.readIntoSync(chunk);
         if (read <= 0) break;
-        input.add(read == chunk.length ? chunk : Uint8List.sublistView(chunk, 0, read));
+        input.add(
+          read == chunk.length ? chunk : Uint8List.sublistView(chunk, 0, read),
+        );
       }
       input.close();
       final digest = sink.digest;
@@ -173,7 +188,10 @@ class ZipStore {
     final tail = raf.readSync(tailSize);
     var eocd = -1;
     for (var i = tail.length - 22; i >= 0; i--) {
-      if (tail[i] != 0x50 || tail[i + 1] != 0x4b || tail[i + 2] != 0x05 || tail[i + 3] != 0x06) {
+      if (tail[i] != 0x50 ||
+          tail[i + 1] != 0x4b ||
+          tail[i + 2] != 0x05 ||
+          tail[i + 3] != 0x06) {
         continue;
       }
       final commentLen = _u16(tail, i + 20);
@@ -189,15 +207,21 @@ class ZipStore {
     if (entries == 0xffff || cdOffset == 0xffffffff || cdSize == 0xffffffff) {
       throw ZipStoreException('ZIP64 не поддерживается');
     }
-    if (cdOffset + cdSize > length) throw ZipStoreException('Каталог ZIP выходит за файл');
+    if (cdOffset + cdSize > length) {
+      throw ZipStoreException('Каталог ZIP выходит за файл');
+    }
     raf.setPositionSync(cdOffset);
     final central = raf.readSync(cdSize);
-    if (central.length != cdSize) throw ZipStoreException('Каталог ZIP прочитан не полностью');
+    if (central.length != cdSize) {
+      throw ZipStoreException('Каталог ZIP прочитан не полностью');
+    }
     final found = <ZipEntryInfo>[];
     var offset = 0;
     while (offset + 46 <= central.length) {
       final sig = _u32(central, offset);
-      if (sig != 0x02014b50) throw ZipStoreException('Повреждена запись каталога ZIP');
+      if (sig != 0x02014b50) {
+        throw ZipStoreException('Повреждена запись каталога ZIP');
+      }
       final method = _u16(central, offset + 10);
       final size = _u32(central, offset + 24);
       final nameLen = _u16(central, offset + 28);
@@ -206,17 +230,30 @@ class ZipStore {
       final local = _u32(central, offset + 42);
       final nameStart = offset + 46;
       final nameEnd = nameStart + nameLen;
-      if (nameEnd > central.length) throw ZipStoreException('Имя ZIP выходит за каталог');
+      if (nameEnd > central.length) {
+        throw ZipStoreException('Имя ZIP выходит за каталог');
+      }
       final name = String.fromCharCodes(central.sublist(nameStart, nameEnd));
       _rejectName(name);
-      found.add(ZipEntryInfo(name: name, method: method, size: size, localOffset: local));
+      found.add(
+        ZipEntryInfo(
+          name: name,
+          method: method,
+          size: size,
+          localOffset: local,
+        ),
+      );
       offset = nameEnd + extraLen + commentLen;
-      if (offset > central.length) throw ZipStoreException('Каталог ZIP оборван');
+      if (offset > central.length) {
+        throw ZipStoreException('Каталог ZIP оборван');
+      }
     }
     if (found.length != entries && entries != 0) {
       // Some writers leave the count as the number of records; trust the walk
       // when it consumed the directory. A short walk is a corrupt archive.
-      if (offset != central.length) throw ZipStoreException('Каталог ZIP оборван');
+      if (offset != central.length) {
+        throw ZipStoreException('Каталог ZIP оборван');
+      }
     }
     return found;
   }
@@ -244,7 +281,9 @@ class ZipStore {
       while (left > 0) {
         final n = left < chunkSize ? left : chunkSize;
         final bytes = raf.readSync(n);
-        if (bytes.length != n) throw ZipStoreException('Обрыв данных ${entry.name}');
+        if (bytes.length != n) {
+          throw ZipStoreException('Обрыв данных ${entry.name}');
+        }
         sink.writeFromSync(bytes);
         input.add(bytes);
         left -= n;
@@ -273,7 +312,10 @@ class ZipStore {
   }
 
   static void _rejectName(String name) {
-    if (name.isEmpty || name.startsWith('/') || name.startsWith('\\') || name.contains('\\')) {
+    if (name.isEmpty ||
+        name.startsWith('/') ||
+        name.startsWith('\\') ||
+        name.contains('\\')) {
       throw ZipStoreException('Недопустимое имя в архиве: $name');
     }
     if (name.split('/').contains('..')) {
@@ -281,7 +323,8 @@ class ZipStore {
     }
   }
 
-  static int _u16(List<int> bytes, int offset) => bytes[offset] | (bytes[offset + 1] << 8);
+  static int _u16(List<int> bytes, int offset) =>
+      bytes[offset] | (bytes[offset + 1] << 8);
 
   static int _u32(List<int> bytes, int offset) =>
       bytes[offset] |

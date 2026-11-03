@@ -56,6 +56,8 @@ class FilamentViewportState extends State<FilamentViewport> {
 
   Future<void> setCamera(String preset) => _commands?.setCamera(preset) ?? Future<void>.value();
 
+  Future<void> release() => _commands?.release() ?? Future<void>.value();
+
   @override
   void didUpdateWidget(FilamentViewport oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -94,7 +96,9 @@ class FilamentViewportState extends State<FilamentViewport> {
     final strings = widget.strings;
     final String text;
     if (code == 'loading') {
-      text = strings.loadingMesh;
+      final loaded = (raw['loaded'] as num?)?.toInt() ?? 0;
+      final total = (raw['total'] as num?)?.toInt() ?? 0;
+      text = total > 0 ? strings.meshProgress(loaded, total) : strings.loadingMesh;
     } else if (code == 'ready') {
       text = strings.meshReady(
         lod0: raw['lod0'] == true,

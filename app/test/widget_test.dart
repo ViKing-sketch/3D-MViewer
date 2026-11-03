@@ -2,17 +2,22 @@ import 'dart:io';
 
 import 'package:field_bim_viewer/main.dart';
 import 'package:field_bim_viewer/src/model.dart';
+import 'package:field_bim_viewer/src/model_page.dart';
+import 'package:field_bim_viewer/src/strings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
-String _repoFile(String relative) => p.normalize(p.join(Directory.current.path, '..', relative));
+String _repoFile(String relative) =>
+    p.normalize(p.join(Directory.current.path, '..', relative));
 
 Future<void> pumpFor(WidgetTester tester, Finder finder) async {
   // Zip open copies on a background isolate. pump() only advances the fake
   // clock, so give that isolate real time and then rebuild.
   for (var i = 0; i < 80; i++) {
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pump();
     if (finder.evaluate().isNotEmpty) return;
   }
@@ -34,7 +39,10 @@ void main() {
       ),
     ]);
     expect(csv, contains('"Basic, Wall"'));
-    expect(csv.split('\n').first, 'storey,class,type,material,count,quantity_kind,quantity_sum');
+    expect(
+      csv.split('\n').first,
+      'storey,class,type,material,count,quantity_kind,quantity_sum',
+    );
   });
 
   testWidgets('directory package shows the property tree', (tester) async {
@@ -60,7 +68,10 @@ void main() {
     expect(
       find.text('5000 мм'),
       findsOneWidget,
-      reason: tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).join(' | '),
+      reason: tester
+          .widgetList<Text>(find.byType(Text))
+          .map((text) => text.data)
+          .join(' | '),
     );
     expect(find.text('КСИ'), findsOneWidget);
 
@@ -106,5 +117,41 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Пакетов не найдено'), findsOneWidget);
     expect(copy.existsSync(), isFalse);
+  });
+
+  testWidgets('back from a model returns to the previous page', (tester) async {
+    tester.view.physicalSize = const Size(1280, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        ModelPage(path: sample, strings: const S(true)),
+                  ),
+                );
+              },
+              child: const Text('open-model'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open-model'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('Wall W-1'), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('open-model'), findsOneWidget);
+    expect(find.text('Wall W-1'), findsNothing);
   });
 }
