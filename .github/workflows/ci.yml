@@ -114,7 +114,8 @@ jobs:
         with:
           flutter-version: '3.44.1'
           cache: true
-      - uses: android-actions/setup-android@v3
+      # v3 still installs the removed SDK package `tools` and fails the job.
+      - uses: android-actions/setup-android@v4
       - name: Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null || true
