@@ -1,5 +1,6 @@
 build/
 cmake-build-*/
+vcpkg_installed/
 .cache/
 .idea/
 .vscode/

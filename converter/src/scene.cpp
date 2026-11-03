@@ -1,6 +1,7 @@
 #include "scene.hpp"
 
 #include "ifc_geom_mesh.hpp"
+#include "mesh_stream.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -14,6 +15,23 @@
 #include <unordered_set>
 
 namespace fbv {
+
+void expand_bbox(Element& element, Vec3 point) {
+  if (!element.has_bbox) {
+    element.bbox_min[0] = element.bbox_max[0] = point.x;
+    element.bbox_min[1] = element.bbox_max[1] = point.y;
+    element.bbox_min[2] = element.bbox_max[2] = point.z;
+    element.has_bbox = true;
+    return;
+  }
+  element.bbox_min[0] = std::min(element.bbox_min[0], point.x);
+  element.bbox_min[1] = std::min(element.bbox_min[1], point.y);
+  element.bbox_min[2] = std::min(element.bbox_min[2], point.z);
+  element.bbox_max[0] = std::max(element.bbox_max[0], point.x);
+  element.bbox_max[1] = std::max(element.bbox_max[1], point.y);
+  element.bbox_max[2] = std::max(element.bbox_max[2], point.z);
+}
+
 namespace {
 
 std::string upper_copy(std::string text) {
@@ -466,22 +484,6 @@ bool mesh_product(const IfcFile& file, const IfcEntity& product, double scale, T
   return false;
 }
 
-void expand_bbox(Element& element, Vec3 point) {
-  if (!element.has_bbox) {
-    element.bbox_min[0] = element.bbox_max[0] = point.x;
-    element.bbox_min[1] = element.bbox_max[1] = point.y;
-    element.bbox_min[2] = element.bbox_max[2] = point.z;
-    element.has_bbox = true;
-    return;
-  }
-  element.bbox_min[0] = std::min(element.bbox_min[0], point.x);
-  element.bbox_min[1] = std::min(element.bbox_min[1], point.y);
-  element.bbox_min[2] = std::min(element.bbox_min[2], point.z);
-  element.bbox_max[0] = std::max(element.bbox_max[0], point.x);
-  element.bbox_max[1] = std::max(element.bbox_max[1], point.y);
-  element.bbox_max[2] = std::max(element.bbox_max[2], point.z);
-}
-
 std::string format_num(double value) {
   char buf[64];
   std::snprintf(buf, sizeof(buf), "%.15g", value);
@@ -772,8 +774,8 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
         const IfcEntity* prop_entity = file.find(prop_id);
         if (prop_entity == nullptr || prop_entity->type != "IFCPROPERTYSINGLEVALUE") {
           if (prop_entity != nullptr) {
-            scene.warnings.push_back("skipped " + prop_entity->type + " in property set " +
-                                     pset.name);
+            add_warning(scene, "unsupported_property",
+                        "skipped " + prop_entity->type + " in property set " + pset.name);
           }
           continue;
         }
@@ -819,7 +821,7 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
           value.unit = "kg";
           value.value = raw;
         } else {
-          scene.warnings.push_back("skipped quantity " + quantity->type);
+          add_warning(scene, "unsupported_property", "skipped quantity " + quantity->type);
           continue;
         }
         quantities.push_back(value);
@@ -885,9 +887,9 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
   const auto geometry_started = std::chrono::steady_clock::now();
   if (options.mesher != "analytic") apply_ifcopenshell_geometry(scene, ifc_text, options);
   if (!scene.ifcopenshell_ran && !file.typed("IFCOPENINGELEMENT").empty()) {
-    scene.warnings.push_back(
-        "IfcOpeningElement is recorded but not subtracted; the analytic mesher does not evaluate "
-        "booleans");
+    add_warning(scene, "opening_not_subtracted",
+                "IfcOpeningElement is recorded but not subtracted; the analytic mesher does not "
+                "evaluate booleans");
   }
 
   bool analytic_used = false;
@@ -897,7 +899,8 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
       std::ostringstream line;
       line << "element " << element.ifc_class << " '" << element.name << "' " << element.guid
            << " has no representation";
-      scene.warnings.push_back(line.str());
+      add_warning(scene, "no_representation", line.str());
+      remember_failure(scene, element, "no_representation", "has no representation");
       ++scene.without_geometry;
       continue;
     }
@@ -907,21 +910,27 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
       element.has_mesh = true;
       element.mesh_source = "analytic-extrusion-v1";
       element.geometry_failure.clear();
+      element.failure_reason.clear();
+      commit_mesh(scene, element, options);
       analytic_used = true;
       scene.notes.push_back("fallback: " + element.guid + " " + element.ifc_class +
                             " meshed by analytic-extrusion");
     } else {
-      std::ostringstream line;
-      line << "failed: " << element.ifc_class << " '" << element.name << "' " << element.guid;
-      if (!element.geometry_failure.empty()) line << ": " << element.geometry_failure;
+      std::string detail = element.geometry_failure;
       if (!why.empty()) {
-        if (!element.geometry_failure.empty())
-          line << "; analytic: " << why;
+        if (!detail.empty())
+          detail += "; analytic: " + why;
         else
-          line << ": " << why;
+          detail = why;
       }
-      if (element.geometry_failure.empty() && why.empty()) line << ": no supported solid";
-      scene.warnings.push_back(line.str());
+      if (detail.empty()) detail = "no supported solid";
+      const std::string code = classify_geometry_failure(detail);
+      std::ostringstream line;
+      line << "failed: " << element.ifc_class << " '" << element.name << "' " << element.guid
+           << ": " << detail;
+      add_warning(scene, code, line.str());
+      remember_failure(scene, element, code, detail);
+      element.failure_reason = code;
       ++scene.failed;
     }
   }
@@ -957,18 +966,37 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
       }
     }
   }
-  if (scene.has_world) {
-    scene.origin = {scene.world_min[0], scene.world_min[1], scene.world_min[2]};
-    for (Element& element : scene.elements) {
-      if (!element.has_mesh) continue;
-      for (std::size_t i = 0; i < element.mesh.position.size(); i += 3) {
-        element.mesh.position[i] -= scene.origin.x;
-        element.mesh.position[i + 1] -= scene.origin.y;
-        element.mesh.position[i + 2] -= scene.origin.z;
-      }
-    }
-  }
+  if (scene.has_world) scene.origin = {scene.world_min[0], scene.world_min[1], scene.world_min[2]};
   return scene;
+}
+
+void add_warning(Scene& scene, const std::string& code, const std::string& text) {
+  scene.warnings.push_back(text);
+  scene.warning_counts[code] += 1;
+}
+
+void remember_failure(Scene& scene, const Element& element, const std::string& code,
+                      const std::string& detail) {
+  FailureNote note;
+  note.guid = element.guid;
+  note.ifc_class = element.ifc_class;
+  note.reason = code;
+  note.detail = detail.size() > 300 ? detail.substr(0, 300) : detail;
+  scene.failures.push_back(std::move(note));
+}
+
+std::string classify_geometry_failure(const std::string& text) {
+  std::string lower = text;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower.find("boolean") != std::string::npos) return "boolean_failed";
+  if (lower.find("no triangulation") != std::string::npos) return "no_triangulation";
+  if (lower.find("profile") != std::string::npos) return "unsupported_profile";
+  if (lower.find("zero sized") != std::string::npos || lower.find("zero size") != std::string::npos)
+    return "zero_size";
+  if (lower.find("no supported solid") != std::string::npos ||
+      lower.find("unsupported") != std::string::npos)
+    return "unsupported_solid";
+  return "mesher_failed";
 }
 
 }  // namespace fbv

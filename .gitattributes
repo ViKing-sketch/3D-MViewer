@@ -4,3 +4,4 @@ third_party/sqlite/** linguist-vendored
 *.hpp text eol=lf
 *.cpp text eol=lf
 *.h text eol=lf
+*.patch text eol=lf

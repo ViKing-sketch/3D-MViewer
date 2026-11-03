@@ -1,5 +1,8 @@
 #include "ifc_geom_mesh.hpp"
 
+#include "mesh_stream.hpp"
+
+#include <algorithm>
 #include <cctype>
 #include <limits>
 #include <sstream>
@@ -38,11 +41,25 @@ bool allowed_class(const std::vector<std::string>& filter, const std::string& if
 }
 
 int thread_count(const ConvertOptions& options) {
-  if (options.threads > 0) return options.threads;
-  const unsigned hc = std::thread::hardware_concurrency();
-  const unsigned n = hc == 0 ? 2u : hc;
-  // One thread can drop later elements when the first conversion fails.
-  return static_cast<int>(std::max(2u, n));
+  int n = 0;
+  if (options.threads > 0) {
+    n = options.threads;
+  } else {
+    const unsigned hc = std::thread::hardware_concurrency();
+    n = hc == 0 ? 2 : static_cast<int>(hc);
+  }
+  if (options.max_threads > 0) n = std::min(n, options.max_threads);
+  if (options.max_memory_mb >= 0) {
+    // One in-flight Open CASCADE shape is large. Stay at two workers below 512 MiB
+    // so a tight cap does not serialize the iterator (one thread aborts on the first
+    // failed element).
+    const int cap = options.max_memory_mb < 512 ? 2 : std::max(2, options.max_memory_mb / 512);
+    n = std::min(n, cap);
+  }
+  if (n < 1) n = 1;
+  const bool asked_for_one = options.threads == 1 || options.max_threads == 1;
+  if (n < 2 && !asked_for_one) n = 2;
+  return n;
 }
 
 std::string guid_of(IfcUtil::IfcBaseEntity* entity) {
@@ -234,12 +251,16 @@ void apply_ifcopenshell_geometry(Scene& scene, const std::string& ifc_text,
         const auto found = by_step.find(step);
         if (found == by_step.end()) continue;
         Element& element = scene.elements[found->second];
+        if (element.mesh.position.empty() && !element.mesh_scratch.empty())
+          reload_mesh_world(scene, element);
         const std::size_t before = element.mesh.indices.size();
         copy_triangulation(tri->geometry(), element.mesh);
         if (element.mesh.indices.size() > before) {
           element.has_mesh = true;
           element.mesh_source = "ifcopenshell-occt";
           element.geometry_failure.clear();
+          element.failure_reason.clear();
+          commit_mesh(scene, element, options);
         }
       } while (iterator.next());
       scene.ifc_log = fresh_log();
@@ -257,11 +278,7 @@ void apply_ifcopenshell_geometry(Scene& scene, const std::string& ifc_text,
     }
   } catch (const std::exception& ex) {
     for (Element& element : scene.elements) {
-      if (element.mesh_source == "ifcopenshell-occt") {
-        element.mesh = TriMesh{};
-        element.has_mesh = false;
-        element.mesh_source.clear();
-      }
+      if (element.mesh_source == "ifcopenshell-occt") discard_element_mesh(scene, element);
     }
     scene.ifcopenshell_ran = false;
     scene.geometry_library = "analytic";

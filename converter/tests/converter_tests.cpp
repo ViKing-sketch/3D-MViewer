@@ -4,12 +4,16 @@
 #include "fbv/sqlite_util.hpp"
 #include "fbv_core.h"
 #include "ifc_parse.hpp"
+#include "mesh_stream.hpp"
+#include "scene.hpp"
+#include "write_pkg.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 #if !defined(_WIN32)
@@ -358,7 +362,8 @@ END-ISO-10303-21;
     const auto cli_json = root / "cli.json";
     const std::string cmd = std::string("\"") + fbvconv + "\" \"" +
                             (testdata / "sample_wall.ifc").string() + "\" -o \"" +
-                            cli_out.string() + "\" --stats --json \"" + cli_json.string() + "\"";
+                            cli_out.string() + "\" --stats --json \"" + cli_json.string() +
+                            "\" --max-threads 2 --max-memory 64";
     const int cli_rc = run_cli(cmd);
     if (cli_rc != 0) std::cerr << "cli exit " << cli_rc << ": " << cmd << "\n";
     CHECK(cli_rc == 0);
@@ -367,6 +372,11 @@ END-ISO-10303-21;
       const std::string summary = fbv::read_text(cli_json.string());
       CHECK(summary.find("\"with_mesh\"") != std::string::npos);
       CHECK(summary.find("\"peak_rss_bytes\"") != std::string::npos);
+      CHECK(summary.find("\"mesh_bytes_peak\"") != std::string::npos);
+      CHECK(summary.find("\"warning_reasons\"") != std::string::npos);
+      CHECK(summary.find("\"no_representation\"") != std::string::npos);
+      CHECK(summary.find("\"max_threads\": 2") != std::string::npos);
+      CHECK(summary.find("\"max_memory_mb\": 64") != std::string::npos);
       CHECK(summary.find("\"timings_s\"") != std::string::npos);
       CHECK(summary.find("\"completeness\": \"ok\"") != std::string::npos);
     }
@@ -429,6 +439,150 @@ END-ISO-10303-21;
   };
   expect_solid("brep_box.ifc", "brep_box", 0, 1);
   expect_solid("mapped_box.ifc", "mapped_box", 2, 3);
+
+  {
+    // Synthetic stand-in for a large model: several meshes bigger than the RAM budget.
+    // Private IFC files are not in the repo. This checks that they are spilled and that
+    // the package still contains every vertex.
+    fbv::Scene scene;
+    scene.schema = "IFC4";
+    scene.project_name = "Streamed";
+    scene.has_world = true;
+    scene.origin = {5, 5, 5};
+    fbv::ConvertOptions stream_options;
+    stream_options.output = (root / "streamed").string();
+    stream_options.as_directory = true;
+    stream_options.write_brep = false;
+    stream_options.source_name = "streamed.ifc";
+    stream_options.max_memory_mb = 1;
+    constexpr int kElements = 4;
+    constexpr int kDoubles = 90000;
+    for (int i = 0; i < kElements; ++i) {
+      fbv::Element element;
+      element.id = i + 1;
+      element.guid = "STREAM" + std::to_string(i);
+      element.ifc_class = "IfcWall";
+      element.name = "S" + std::to_string(i);
+      element.has_mesh = true;
+      element.has_representation = true;
+      element.mesh.position.assign(kDoubles, 5.0);
+      element.mesh.normal.assign(kDoubles, 0.0);
+      element.mesh.indices = {0, 1, 2};
+      fbv::commit_mesh(scene, element, stream_options);
+      scene.elements.push_back(std::move(element));
+    }
+    CHECK(scene.mesh_resident_bytes == 0);
+    CHECK(scene.mesh_bytes_peak > 1024ull * 1024ull);
+    CHECK(scene.mesh_bytes_peak < 3ull * 1024ull * 1024ull);
+    for (const fbv::Element& element : scene.elements) {
+      CHECK(element.mesh.position.empty());
+      CHECK(!element.mesh_scratch.empty());
+      CHECK(element.triangle_count == 1);
+    }
+    fbv::write_scene_package(scene, stream_options, "ISO-10303-21;", "streamed.ifc");
+    std::string stream_report;
+    CHECK(fbv::validate_package(stream_options.output, stream_report) == 0);
+    fbv::GlbContents streamed_glb;
+    std::string streamed_error;
+    CHECK(
+        fbv::read_glb(std::filesystem::path(stream_options.output) / "mesh" / "elements" / "1.glb",
+                      streamed_glb, streamed_error));
+    std::vector<float> streamed_xyz;
+    CHECK(fbv::glb_positions(streamed_glb, streamed_xyz, streamed_error));
+    CHECK(streamed_xyz.size() == static_cast<std::size_t>(kDoubles));
+    CHECK(near(streamed_xyz.front(), 0.0, 1e-4));
+    CHECK(near(streamed_xyz.back(), 0.0, 1e-4));
+  }
+
+  {
+    // A second representation reloads a spilled mesh. If the combined mesh fits
+    // in the budget, the old scratch file must not stay behind as the source.
+    fbv::Scene scene;
+    fbv::Element element;
+    element.id = 7;
+    element.has_mesh = true;
+    fbv::ConvertOptions tight;
+    tight.max_memory_mb = 1;
+    element.mesh.position.assign(90000, 1.0);
+    element.mesh.normal.assign(90000, 0.0);
+    element.mesh.indices = {0, 1, 2};
+    fbv::commit_mesh(scene, element, tight);
+    CHECK(element.mesh.position.empty());
+    CHECK(!element.mesh_scratch.empty());
+    fbv::reload_mesh_world(scene, element);
+    element.mesh.position.insert(element.mesh.position.end(), {8.0, 8.0, 8.0});
+    element.mesh.normal.insert(element.mesh.normal.end(), {0.0, 0.0, 1.0});
+    element.mesh.indices.insert(element.mesh.indices.end(), {1, 2, 3});
+    fbv::ConvertOptions roomy;
+    roomy.max_memory_mb = 64;
+    fbv::commit_mesh(scene, element, roomy);
+    CHECK(element.mesh_scratch.empty());
+    CHECK(element.mesh.position.size() == 90003);
+    CHECK(element.triangle_count == 2);
+    CHECK(near(element.mesh.position.back(), 8.0, 1e-9));
+    fbv::clear_mesh_scratch(scene);
+  }
+
+  {
+    constexpr int kWalls = 24;
+    std::ostringstream ifc;
+    ifc << "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC2X3'));\nENDSEC;\nDATA;\n";
+    ifc << "#1=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);\n";
+    ifc << "#2=IFCDIRECTION((0.,0.,1.));\n";
+    ifc << "#3=IFCDIRECTION((1.,0.,0.));\n";
+    ifc << "#4=IFCCARTESIANPOINT((0.,0.,0.));\n";
+    ifc << "#5=IFCAXIS2PLACEMENT3D(#4,#2,#3);\n";
+    const char* alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+    for (int i = 0; i < kWalls; ++i) {
+      std::string guid = "0Yvh4$d$H4PgX8k1$f$x00";
+      guid[20] = alphabet[(i / 64) % 64];
+      guid[21] = alphabet[i % 64];
+      const int base = 10 + i * 10;
+      const double x = static_cast<double>(i) * 2.0;
+      ifc << "#" << base << "=IFCCARTESIANPOINT((" << x << ",0.));\n";
+      ifc << "#" << (base + 1) << "=IFCCARTESIANPOINT((" << (x + 1.0) << ",0.));\n";
+      ifc << "#" << (base + 2) << "=IFCCARTESIANPOINT((" << x << ",1.));\n";
+      ifc << "#" << (base + 3) << "=IFCPOLYLINE((#" << base << ",#" << (base + 1) << ",#"
+          << (base + 2) << ",#" << base << "));\n";
+      ifc << "#" << (base + 4) << "=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,#" << (base + 3) << ");\n";
+      ifc << "#" << (base + 5) << "=IFCEXTRUDEDAREASOLID(#" << (base + 4) << ",#5,#2,1.);\n";
+      ifc << "#" << (base + 6) << "=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',(#" << (base + 5)
+          << "));\n";
+      ifc << "#" << (base + 7) << "=IFCPRODUCTDEFINITIONSHAPE($,$,(#" << (base + 6) << "));\n";
+      ifc << "#" << (base + 8) << "=IFCWALL('" << guid << "',$,'W" << i << "',$,$,$,#" << (base + 7)
+          << ",$,$);\n";
+    }
+    ifc << "ENDSEC;\nEND-ISO-10303-21;\n";
+    fbv::ConvertOptions many;
+    many.output = (root / "many").string();
+    many.as_directory = true;
+    many.source_name = "many.ifc";
+    many.max_threads = 2;
+    many.max_memory_mb = 1;
+    many.stats = true;
+    many.json_output = (root / "many.json").string();
+    const auto many_status = fbv::convert_text(ifc.str(), many);
+    if (many_status.code != 0) std::cerr << many_status.error << "\n";
+    CHECK(many_status.code == 0);
+    CHECK(many_status.elements == kWalls);
+    CHECK(many_status.with_mesh == kWalls);
+    CHECK(many_status.failed == 0);
+    CHECK(many_status.completeness_ok);
+    CHECK(many_status.peak_rss_bytes > 0);
+    CHECK(many_status.mesh_bytes_peak > 0);
+    CHECK(many_status.mesh_bytes_peak < 8ull * 1024ull * 1024ull);
+#ifdef FBV_WITH_IFCOPENSHELL
+    CHECK(many_status.threads <= 2);
+    CHECK(many_status.threads >= 2);
+#endif
+    const std::string many_json = fbv::read_text(many.json_output);
+    CHECK(many_json.find("\"peak_rss_bytes\"") != std::string::npos);
+    CHECK(many_json.find("\"warning_reasons\"") != std::string::npos);
+    CHECK(many_json.find("\"max_threads\": 2") != std::string::npos);
+    CHECK(many_json.find("\"mesh_budget_bytes\"") != std::string::npos);
+    std::string many_report;
+    CHECK(fbv::validate_package(many.output, many_report) == 0);
+  }
 
   if (g_failed != 0) {
     std::cerr << g_failed << " converter checks failed\n";

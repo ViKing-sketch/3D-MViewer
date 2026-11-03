@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
 project(field_bim_viewer VERSION 0.1.0 LANGUAGES C CXX)
 
+# OCCT 7.8.1 and other vendored projects still call cmake_minimum_required() below 3.5.
+# CMake 4 rejects that unless this floor is set. The OCCT superbuild also passes it
+# on its own command line; the environment covers any nested cmake it launches.
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM OR CMAKE_POLICY_VERSION_MINIMUM VERSION_LESS 3.5)
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING
+      "Minimum CMake policy version for bundled third-party projects" FORCE)
+endif()
+set(ENV{CMAKE_POLICY_VERSION_MINIMUM} "${CMAKE_POLICY_VERSION_MINIMUM}")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

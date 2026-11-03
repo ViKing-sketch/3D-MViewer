@@ -25,6 +25,9 @@ void print_usage() {
       << "  --mesher <auto|ifcopenshell|analytic>\n"
       << "                               auto — IfcOpenShell, если собран, иначе аналитический\n"
       << "  --threads <n>                потоки итератора геометрии (0 = по ядрам, минимум 2)\n"
+      << "  --max-threads <n>            верхняя граница --threads и автовыбора\n"
+      << "  --max-memory <МБ>            бюджет мешей в RAM (0 — сбрасывать каждый элемент);\n"
+      << "                               также ограничивает потоки OCCT, около 512 МБ на поток\n"
       << "  --allow-incomplete           записать пакет, даже если элемент исходника потерян\n"
       << "  --stats                      сводка: тайминги, пик RSS, треугольники, размер пакета\n"
       << "  --json <file|->              та же сводка в JSON ( - — на stdout)\n"
@@ -104,6 +107,12 @@ int main(int argc, char** argv) {
         }
       } else if (arg == "--threads") {
         options.threads = std::stoi(need(arg.c_str()));
+      } else if (arg == "--max-threads") {
+        options.max_threads = std::stoi(need(arg.c_str()));
+        if (options.max_threads < 1) throw std::runtime_error("--max-threads должен быть >= 1");
+      } else if (arg == "--max-memory") {
+        options.max_memory_mb = std::stoi(need(arg.c_str()));
+        if (options.max_memory_mb < 0) throw std::runtime_error("--max-memory должен быть >= 0");
       } else if (arg == "--allow-incomplete") {
         options.allow_incomplete = true;
       } else if (arg == "--stats") {
@@ -149,6 +158,7 @@ int main(int argc, char** argv) {
           << "mesher: " << status.mesher << "\n"
           << "threads: " << status.threads << "\n"
           << "peak_rss_mb: " << rss_mb << "\n"
+          << "mesh_bytes_peak: " << status.mesh_bytes_peak << "\n"
           << "package_mb: " << pkg_mb << "\n"
           << "parse_s: " << status.parse_seconds << "\n"
           << "geometry_s: " << status.geometry_seconds << "\n"

@@ -51,6 +51,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build g++ \
             libboost-system-dev libboost-program-options-dev libboost-regex-dev \
             libboost-thread-dev libboost-date-time-dev libboost-iostreams-dev \
+            libboost-locale-dev \
             libgl1-mesa-dev libegl1-mesa-dev libeigen3-dev
       - name: Configure
         run: cmake --preset linux-gcc-ifcopenshell
@@ -64,17 +65,16 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
-      - name: Install Boost
+      - name: Locate vcpkg
         shell: pwsh
         run: |
           $root = $env:VCPKG_ROOT
           if (-not $root) { $root = $env:VCPKG_INSTALLATION_ROOT }
           if (-not $root) { $root = "C:\vcpkg" }
-          & "$root\vcpkg.exe" install boost-system:x64-windows boost-program-options:x64-windows boost-regex:x64-windows boost-thread:x64-windows boost-date-time:x64-windows boost-iostreams:x64-windows eigen3:x64-windows
           "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Configure
         shell: pwsh
-        run: cmake --preset windows-msvc-ifcopenshell "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+        run: cmake --preset windows-msvc-ifcopenshell "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
       - name: Build
         run: cmake --build --preset windows-msvc-ifcopenshell --config Release
       - name: Test

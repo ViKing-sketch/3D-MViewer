@@ -5,6 +5,7 @@
 #include "math.hpp"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,13 @@ struct TypeInfo {
   std::vector<Pset> psets;
 };
 
+struct FailureNote {
+  std::string guid;
+  std::string ifc_class;
+  std::string reason;
+  std::string detail;
+};
+
 struct Element {
   std::int64_t ifc_id = 0;
   std::int64_t id = 0;
@@ -86,6 +94,12 @@ struct Element {
   bool has_representation = false;
   std::string mesh_source;
   std::string geometry_failure;
+  std::string failure_reason;
+  int triangle_count = 0;
+  // World-space mesh spilled to disk so the element vector does not keep it.
+  std::string mesh_scratch;
+  bool mesh_local = false;
+  std::uint64_t mesh_accounted_bytes = 0;
   bool has_bbox = false;
   double bbox_min[3]{};
   double bbox_max[3]{};
@@ -105,6 +119,8 @@ struct Scene {
   std::vector<TypeInfo> types;
   std::vector<Element> elements;
   std::vector<std::string> warnings;
+  std::map<std::string, int> warning_counts;
+  std::vector<FailureNote> failures;
   std::vector<std::string> notes;
   std::vector<std::string> missing_guids;
   bool has_world = false;
@@ -123,7 +139,16 @@ struct Scene {
   int triangles = 0;
   int threads = 1;
   double geometry_seconds = 0;
+  std::string mesh_scratch_dir;
+  std::uint64_t mesh_resident_bytes = 0;
+  std::uint64_t mesh_bytes_peak = 0;
 };
+
+void expand_bbox(Element& element, Vec3 point);
+void add_warning(Scene& scene, const std::string& code, const std::string& text);
+void remember_failure(Scene& scene, const Element& element, const std::string& code,
+                      const std::string& detail);
+std::string classify_geometry_failure(const std::string& text);
 
 Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std::string& ifc_text);
 

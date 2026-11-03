@@ -52,6 +52,7 @@ if(NOT EXISTS "${FBV_OCCT_STAMP}")
     -G "${CMAKE_GENERATOR}"
     -S "${occt781_SOURCE_DIR}"
     -B "${FBV_OCCT_BUILD}"
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     -DCMAKE_INSTALL_PREFIX=${FBV_OCCT_PREFIX}
     -DBUILD_LIBRARY_TYPE=Shared
     -DINSTALL_DIR_LAYOUT=Unix
@@ -158,7 +159,10 @@ if(WIN32)
   set(ENV{CONDA_BUILD} "1")
 endif()
 
-find_package(Boost REQUIRED COMPONENTS system program_options regex thread date_time iostreams)
+# Header-only pieces IfcOpenShell includes (logic, uuid, scope_exit, optional, ...)
+# are not Boost COMPONENTS. On vcpkg they are separate ports listed in vcpkg.json.
+# locale is compiled; IfcCharacterDecoder calls boost::locale::conv::utf_to_utf.
+find_package(Boost REQUIRED COMPONENTS system program_options regex thread date_time iostreams locale)
 if(NOT Boost_LIBRARIES)
   set(Boost_LIBRARIES
     Boost::system
@@ -167,6 +171,7 @@ if(NOT Boost_LIBRARIES)
     Boost::thread
     Boost::date_time
     Boost::iostreams
+    Boost::locale
   )
 endif()
 if(NOT Boost_INCLUDE_DIRS)
@@ -212,7 +217,37 @@ FetchContent_GetProperties(ifcopenshell)
 if(NOT ifcopenshell_POPULATED)
   FetchContent_Populate(ifcopenshell)
 endif()
+
+# Re-applied on a clean configure. The patch is idempotent: a tree that already
+# contains it is left alone. git apply does not need a git checkout of IfcOpenShell.
+set(FBV_IOS_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/ifcopenshell-msvc-memory.patch")
+find_package(Git REQUIRED)
+execute_process(
+  COMMAND "${GIT_EXECUTABLE}" apply --check --reverse --whitespace=nowarn "${FBV_IOS_PATCH}"
+  WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
+  RESULT_VARIABLE FBV_IOS_ALREADY
+  OUTPUT_QUIET ERROR_QUIET
+)
+if(NOT FBV_IOS_ALREADY EQUAL 0)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${FBV_IOS_PATCH}"
+    WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
+    RESULT_VARIABLE FBV_IOS_APPLY
+    ERROR_VARIABLE FBV_IOS_APPLY_ERR
+  )
+  if(NOT FBV_IOS_APPLY EQUAL 0)
+    message(FATAL_ERROR
+      "Failed to patch IfcOpenShell at ${ifcopenshell_SOURCE_DIR} (exit ${FBV_IOS_APPLY}): ${FBV_IOS_APPLY_ERR}")
+  endif()
+  message(STATUS "Patched IfcOpenShell for MSVC 19.50 profile init and bounded OCCT shape memory")
+else()
+  message(STATUS "IfcOpenShell patch already applied in ${ifcopenshell_SOURCE_DIR}")
+endif()
+
 add_subdirectory("${ifcopenshell_SOURCE_DIR}/cmake" "${ifcopenshell_BINARY_DIR}" EXCLUDE_FROM_ALL)
+if(TARGET Boost::locale)
+  target_link_libraries(IfcParse PUBLIC Boost::locale)
+endif()
 set(BUILD_SHARED_LIBS "${_fbv_shared_libs}")
 
 add_library(fbv_ifcopenshell INTERFACE)

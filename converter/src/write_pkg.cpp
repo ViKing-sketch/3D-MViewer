@@ -1,4 +1,6 @@
 #include "write_pkg.hpp"
+
+#include "mesh_stream.hpp"
 #include "scene.hpp"
 
 #include "fbv/convert.hpp"
@@ -92,13 +94,17 @@ void append_file(std::ostream& out, const std::filesystem::path& path) {
 }
 
 // BIN payload is written to scratch files and copied into the GLB so the triangle
-// buffer is not held twice. release drops each element's mesh after it is copied.
-void write_glb_file(const std::filesystem::path& path, const std::vector<Element*>& elements,
-                    bool release) {
+// buffer is not held twice. A mesh that was spilled during conversion is loaded
+// for one element at a time and released again before the next element.
+void write_glb_file(Scene& scene, const std::filesystem::path& path,
+                    const std::vector<Element*>& elements, bool release) {
   std::vector<Element*> live;
   for (Element* element : elements) {
-    if (element != nullptr && element->has_mesh && !element->mesh.indices.empty())
-      live.push_back(element);
+    if (element == nullptr || !element->has_mesh) continue;
+    if (element->mesh.indices.empty() && element->mesh_scratch.empty() &&
+        element->triangle_count <= 0)
+      continue;
+    live.push_back(element);
   }
   const auto scratch_dir =
       path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
@@ -126,6 +132,8 @@ void write_glb_file(const std::filesystem::path& path, const std::vector<Element
   std::uint32_t normal_cursor = 0;
   std::uint32_t index_cursor = 0;
   for (Element* element : live) {
+    prepare_mesh_for_write(scene, *element);
+    if (element->mesh.indices.empty()) continue;
     GlbRange range;
     range.element = element;
     range.pos_offset = vertex_cursor;
@@ -163,14 +171,7 @@ void write_glb_file(const std::filesystem::path& path, const std::vector<Element
     normal_cursor += static_cast<std::uint32_t>(element->mesh.normal.size() / 3);
     index_cursor += range.index_count;
     ranges.push_back(range);
-    if (release) {
-      element->mesh.position.clear();
-      element->mesh.position.shrink_to_fit();
-      element->mesh.normal.clear();
-      element->mesh.normal.shrink_to_fit();
-      element->mesh.indices.clear();
-      element->mesh.indices.shrink_to_fit();
-    }
+    if (release || !element->mesh_scratch.empty()) release_mesh_ram(*element);
   }
   pos_out.close();
   nrm_out.close();
@@ -188,11 +189,11 @@ void write_glb_file(const std::filesystem::path& path, const std::vector<Element
   root.set("asset", std::move(asset));
   root.set("scene", Json::integer(0));
   Json scenes = Json::array();
-  Json scene = Json::object();
+  Json gltf_scene = Json::object();
   Json scene_nodes = Json::array();
   scene_nodes.push(Json::integer(0));
-  scene.set("nodes", std::move(scene_nodes));
-  scenes.push(std::move(scene));
+  gltf_scene.set("nodes", std::move(scene_nodes));
+  scenes.push(std::move(gltf_scene));
   root.set("scenes", std::move(scenes));
 
   Json nodes = Json::array();
@@ -704,7 +705,9 @@ void write_scene_package(Scene& scene, const ConvertOptions& options,
     if (!element.has_mesh) continue;
     element.mesh_node = node++;
     if (options.write_brep && element.has_bbox) element.brep_ref = brep++;
-    triangles += static_cast<int>(element.mesh.indices.size() / 3);
+    const int tri = element.triangle_count > 0 ? element.triangle_count
+                                               : static_cast<int>(element.mesh.indices.size() / 3);
+    triangles += tri;
     ++with_mesh;
   }
   scene.triangles = triangles;
@@ -716,10 +719,11 @@ void write_scene_package(Scene& scene, const ConvertOptions& options,
     for (Element& element : scene.elements) {
       if (!element.has_mesh) continue;
       meshed.push_back(&element);
-      write_glb_file(staging / "mesh" / "elements" / (std::to_string(element.id) + ".glb"),
+      write_glb_file(scene, staging / "mesh" / "elements" / (std::to_string(element.id) + ".glb"),
                      {&element}, false);
     }
-    write_glb_file(staging / "mesh" / "lod0.glb", meshed, true);
+    write_glb_file(scene, staging / "mesh" / "lod0.glb", meshed, true);
+    clear_mesh_scratch(scene);
     write_sqlite(scene, staging / "meta.sqlite");
     if (options.write_brep) write_brep(scene, staging / "brep.pack", staging / "brep.index");
 

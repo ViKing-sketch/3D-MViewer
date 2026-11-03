@@ -1,0 +1,104 @@
+diff --git a/src/ifcgeom/profile_helper.h b/src/ifcgeom/profile_helper.h
+--- a/src/ifcgeom/profile_helper.h
++++ b/src/ifcgeom/profile_helper.h
+@@ -11,6 +11,11 @@
+ 			boost::optional<double> radius;
+ 
+ 			profile_point(const std::array<double, 2>& p, const boost::optional<double>& r = boost::none)
++				: xy(p), radius(r) {
++			}
++
++			// fbv: MSVC 19.50 + Boost 1.92 rejects {pt,{r}} list-init of boost::optional.
++			profile_point(const std::array<double, 2>& p, double r)
+ 				: xy(p), radius(r) {
+ 			}
+ 		};
+diff --git a/src/ifcgeom/Iterator.cpp b/src/ifcgeom/Iterator.cpp
+--- a/src/ifcgeom/Iterator.cpp
++++ b/src/ifcgeom/Iterator.cpp
+@@ -195,6 +195,8 @@
+ 	kernel_pool.reserve(conc_threads);
+ 	for (unsigned i = 0; i < conc_threads; ++i) {
+ 		kernel_pool.push_back(new ifcopenshell::geometry::Converter(std::unique_ptr<ifcopenshell::geometry::kernels::AbstractKernel>(converter_->kernel()->clone()), ifc_file, settings_));
++		// fbv: worker mappings default to caching every taxonomy node.
++		kernel_pool.back()->mapping()->use_caching() = false;
+ 	}
+ 
+ 	std::vector<std::future<geometry_conversion_result*>> threadpool;
+@@ -203,6 +205,21 @@
+ 		ifcopenshell::geometry::Converter* K = nullptr;
+ 		if (threadpool.size() < kernel_pool.size()) {
+ 			K = kernel_pool[threadpool.size()];
++		}
++
++		// fbv: do not let completed meshes pile up ahead of the consumer.
++		while (!terminating_) {
++			size_t pending = 0;
++			{
++				std::lock_guard<std::mutex> lk(element_ready_mutex_);
++				const size_t produced = all_processed_elements_.size();
++				const size_t handed = async_elements_returned_;
++				pending = produced > handed ? produced - handed : 0;
++			}
++			if (pending < conc_threads) {
++				break;
++			}
++			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+ 		}
+ 
+ 		while (threadpool.size() == conc_threads) {
+@@ -373,6 +390,7 @@
+ 
+ 	auto elem = process_based_on_settings(settings, brep);
+ 	if (!elem) {
++		delete brep;
+         Logger::SetProduct(boost::none);
+ 		return;
+ 	}
+@@ -393,11 +411,23 @@
+ 			if (elem2) {
+ 				rep->breps.push_back(brep2);
+ 				rep->elements.push_back(elem2);
++			} else {
++				delete brep2;
+ 			}
+ 		}
+ 	}
+ 
+ 	Logger::SetProduct(boost::none);
++
++	// fbv: triangulation already copied the mesh. Drop the OCCT shape before the
++	// result sits in the consumer queue. next() still walks a native slot.
++	if (settings.get<ifcopenshell::geometry::settings::IteratorOutput>().get() ==
++		ifcopenshell::geometry::settings::TRIANGULATED) {
++		for (auto* brep_ptr : rep->breps) {
++			delete brep_ptr;
++		}
++		rep->breps.assign(rep->elements.size(), nullptr);
++	}
+ }
+ 
+ IfcGeom::Element* IfcGeom::Iterator::process_based_on_settings(ifcopenshell::geometry::Settings settings, IfcGeom::BRepElement* elem, IfcGeom::TriangulationElement* previous)
+@@ -436,15 +466,15 @@
+ 
+ bool IfcGeom::Iterator::wait_for_element() {
+ 	while (true) {
+-		size_t s;
+ 		{
+ 			std::lock_guard<std::mutex> lk(element_ready_mutex_);
+-			s = all_processed_elements_.size();
+-		}
+-		if (s > async_elements_returned_) {
+-			++async_elements_returned_;
+-			return true;
+-		} else if (finished_) {
++			const size_t s = all_processed_elements_.size();
++			if (s > async_elements_returned_) {
++				++async_elements_returned_;
++				return true;
++			}
++		}
++		if (finished_) {
+ 			return false;
+ 		} else {
+ 			std::this_thread::sleep_for(std::chrono::milliseconds(10));

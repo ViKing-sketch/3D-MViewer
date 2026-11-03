@@ -44,9 +44,9 @@ ctest --preset linux-gcc --output-on-failure
 
 Код 0 — успех, 2 — ошибка конвертации, 3 — пакет не прошёл проверку. Лог пишется рядом: `/tmp/sample.fbvpkg.log`.
 
-Полезные флаги: `--no-brep`, `--class IfcWall,IfcSlab`, `--linear-deflection`, `--angular-deflection`, `--lod`, `--mesher auto|ifcopenshell|analytic`, `--threads`, `--stats`, `--json <файл|->`, `--allow-incomplete`, `--validate`.
+Полезные флаги: `--no-brep`, `--class IfcWall,IfcSlab`, `--linear-deflection`, `--angular-deflection`, `--lod`, `--mesher auto|ifcopenshell|analytic`, `--threads`, `--max-threads`, `--max-memory`, `--stats`, `--json <файл|->`, `--allow-incomplete`, `--validate`.
 
-Сборка с IfcOpenShell (нужны пакеты Boost: system, program_options, regex, thread, date_time, iostreams, а также `libeigen3-dev`, `libgl1-mesa-dev` и `libegl1-mesa-dev`: IfcOpenShell требует Eigen, отдельные toolkit обмена OCCT тянут TKV3d):
+Сборка с IfcOpenShell (нужны пакеты Boost: system, program_options, regex, thread, date_time, iostreams, locale, а также `libeigen3-dev`, `libgl1-mesa-dev` и `libegl1-mesa-dev`: IfcOpenShell требует Eigen, отдельные toolkit обмена OCCT тянут TKV3d). Заголовочные части Boost (logic, uuid, scope_exit и остальные, которые реально включает IfcOpenShell) на Linux приходят с `libboost-dev`. На Windows их ставит манифест `vcpkg.json`:
 
 ```bash
 cmake --preset linux-gcc-ifcopenshell
@@ -55,7 +55,7 @@ ctest --preset linux-gcc-ifcopenshell --output-on-failure
 ./build/linux-gcc-ifcopenshell/converter/fbvconv model.ifc -o /tmp/model.fbvpkg --stats --json /tmp/model.json
 ```
 
-Число потоков OCCT на первом configure задаётся `-DFBV_SUPERBUILD_JOBS=N` (пусто — все ядра). Пик RSS и тайминги parse/geometry/write пишет `--stats` и `--json`. Код 4 — в пакет не попал GlobalId исходного элемента; `--allow-incomplete` всё равно записывает пакет и перечисляет пропуски в логе.
+Число потоков OCCT на первом configure задаётся `-DFBV_SUPERBUILD_JOBS=N` (пусто — все ядра). Пик RSS, пик байт меша в RAM и тайминги parse/geometry/write пишет `--stats` и `--json` (`peak_rss_bytes`, `mesh_bytes_peak`, `warning_reasons`). `--threads` задаёт потоки итератора, `--max-threads` ограничивает и это значение, и автовыбор по ядрам. `--max-memory <МБ>` — сколько байт треугольников держать в RAM, прежде чем сбросить остальные на диск (0 сбрасывает каждый элемент; без флага бюджет 64 МБ). Тот же предел режет число потоков OCCT примерно до одного на 512 МБ, но не ниже двух, если явно не просить один поток: однопоточный итератор IfcOpenShell останавливается на первом сбое. Код 4 — в пакет не попал GlobalId исходного элемента; `--allow-incomplete` всё равно записывает пакет и перечисляет пропуски в логе.
 
 Образ Docker с тем же CLI: `docker build -t fbvconv .`
 
@@ -79,17 +79,16 @@ CI гоняет пресет `windows-msvc` на образе `windows-2022` и 
 
 Нужны Visual Studio 2026 (генератор «Visual Studio 18 2026», MSVC 19.50), CMake **4.2 или новее** (в 4.2 появился этот генератор) и Boost для IfcOpenShell. Команды — из «x64 Native Tools Command Prompt for VS 2026» или Developer PowerShell, где `cl` уже в `PATH`.
 
-Boost через vcpkg (динамический CRT, триплет `x64-windows`):
+Boost и Eigen ставятся из манифеста `vcpkg.json` (динамический CRT, триплет `x64-windows`). В списке не только библиотеки, которые линкует `find_package` (system, program_options, regex, thread, date_time, iostreams, locale), но и заголовки, которые IfcOpenShell реально включает: logic, uuid, scope_exit, optional, algorithm, lexical_cast, variant, multi_index, circular_buffer, dynamic_bitset, smart_ptr, property_tree, function, foreach, math, range, mpl, functional, preprocessor, unordered, random. Отдельный `vcpkg install` со списком пакетов не нужен: toolchain в режиме манифеста ставит зависимости при configure.
 
 ```bat
-vcpkg install boost-system:x64-windows boost-program-options:x64-windows boost-regex:x64-windows boost-thread:x64-windows boost-date-time:x64-windows boost-iostreams:x64-windows eigen3:x64-windows
-cmake --preset windows-vs2026 -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake
+cmake --preset windows-vs2026 -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
 cmake --build --preset windows-vs2026 --config Release
 ctest --preset windows-vs2026 -C Release --output-on-failure
-build\windows-vs2026\converter\Release\fbvconv.exe model.ifc -o %TEMP%\model.fbvpkg --stats --json %TEMP%\model.json
+build\windows-vs2026\converter\Release\fbvconv.exe model.ifc -o %TEMP%\model.fbvpkg --stats --json %TEMP%\model.json --max-threads 4 --max-memory 4096
 ```
 
-Если Boost уже находится через `find_package` без vcpkg, toolchain-файл не нужен: достаточно `cmake --preset windows-vs2026`. Первый configure собирает Open CASCADE 7.8.1 в Release и ставит его в `build\windows-vs2026\occt-install`. Собирайте конфигурацию **Release**: импортируемые библиотеки OCCT ставятся только для неё. Параллелизм суперсборки: `-DFBV_SUPERBUILD_JOBS=8`. DLL OCCT копируются рядом с `fbvconv.exe` после линковки.
+Если Boost уже находится через `find_package` без vcpkg, toolchain-файл не нужен: достаточно `cmake --preset windows-vs2026`. Первый configure собирает Open CASCADE 7.8.1 в Release и ставит его в `build\windows-vs2026\occt-install`. CMake 4.x иначе отклоняет `cmake_minimum_required` OCCT ниже 3.5; суперсборка передаёт `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`. Собирайте конфигурацию **Release**: импортируемые библиотеки OCCT ставятся только для неё. Параллелизм суперсборки: `-DFBV_SUPERBUILD_JOBS=8`. DLL OCCT копируются рядом с `fbvconv.exe` после линковки. Патч IfcOpenShell (конструктор `profile_point` для MSVC 19.50 + Boost 1.92 и сброс форм OCCT по элементу) накладывается при configure и повторяется на чистом дереве FetchContent.
 
 Пресет `windows-msvc-ifcopenshell` — то же самое генератором «Visual Studio 17 2022» (образ CI `windows-2022`).
 

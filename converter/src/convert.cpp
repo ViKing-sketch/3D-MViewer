@@ -1,6 +1,7 @@
 #include "fbv/convert.hpp"
 
 #include "ifc_parse.hpp"
+#include "mesh_stream.hpp"
 #include "scene.hpp"
 #include "write_pkg.hpp"
 #include "xde_import.hpp"
@@ -79,6 +80,7 @@ void fill_status(ConvertStatus& status, const Scene& scene) {
   status.triangles = scene.triangles;
   status.threads = scene.threads;
   status.geometry_seconds = scene.geometry_seconds;
+  status.mesh_bytes_peak = scene.mesh_bytes_peak;
   status.mesher = scene.mesh_generator;
   status.schema = scene.schema;
   status.completeness_ok = scene.completeness_ok;
@@ -98,6 +100,11 @@ std::string summary_json(const ConvertStatus& status, const ConvertOptions& opti
   root.set("geometry_kernel",
            Json::string(scene != nullptr ? scene->geometry_library : "analytic"));
   root.set("threads", Json::integer(status.threads));
+  root.set("max_threads", Json::integer(options.max_threads));
+  root.set("max_memory_mb", Json::integer(options.max_memory_mb));
+  root.set("mesh_budget_bytes",
+           Json::integer(static_cast<std::int64_t>(mesh_budget_bytes(options))));
+  root.set("mesh_bytes_peak", Json::integer(static_cast<std::int64_t>(status.mesh_bytes_peak)));
   root.set("elements", Json::integer(status.elements));
   root.set("with_mesh", Json::integer(status.with_mesh));
   root.set("failed", Json::integer(status.failed));
@@ -105,6 +112,30 @@ std::string summary_json(const ConvertStatus& status, const ConvertOptions& opti
   root.set("excluded", Json::integer(scene != nullptr ? scene->excluded : 0));
   root.set("triangles", Json::integer(status.triangles));
   root.set("warnings", Json::integer(status.warnings));
+  Json reasons = Json::object();
+  Json failures = Json::array();
+  int failures_omitted = 0;
+  if (scene != nullptr) {
+    for (const auto& entry : scene->warning_counts)
+      reasons.set(entry.first, Json::integer(entry.second));
+    constexpr int kFailureLimit = 64;
+    for (std::size_t i = 0; i < scene->failures.size(); ++i) {
+      if (static_cast<int>(i) >= kFailureLimit) {
+        failures_omitted = static_cast<int>(scene->failures.size() - i);
+        break;
+      }
+      const FailureNote& note = scene->failures[i];
+      Json item = Json::object();
+      item.set("guid", Json::string(note.guid));
+      item.set("ifc_class", Json::string(note.ifc_class));
+      item.set("reason", Json::string(note.reason));
+      item.set("detail", Json::string(note.detail));
+      failures.push(std::move(item));
+    }
+  }
+  root.set("warning_reasons", std::move(reasons));
+  root.set("failures", std::move(failures));
+  root.set("failures_omitted", Json::integer(failures_omitted));
   root.set("completeness", Json::string(status.completeness_ok ? "ok" : "incomplete"));
   Json missing = Json::array();
   if (scene != nullptr) {
@@ -136,7 +167,8 @@ void emit_json(ConvertStatus& status, const ConvertOptions& options, const Scene
   status.json_path = options.json_output;
 }
 
-std::string render_log(const Scene& scene, const ConvertStatus& status) {
+std::string render_log(const Scene& scene, const ConvertStatus& status,
+                       const ConvertOptions& options) {
   std::ostringstream log;
   log << "fbvconv " << scene.mesh_generator << "\n";
   log << "schema: " << scene.schema << "\n";
@@ -151,6 +183,13 @@ std::string render_log(const Scene& scene, const ConvertStatus& status) {
   log << "triangles: " << status.triangles << "\n";
   log << "completeness: " << (scene.completeness_ok ? "ok" : "incomplete") << "\n";
   log << "peak_rss_bytes: " << status.peak_rss_bytes << "\n";
+  log << "mesh_bytes_peak: " << status.mesh_bytes_peak << "\n";
+  log << "mesh_budget_bytes: " << mesh_budget_bytes(options) << "\n";
+  if (!scene.warning_counts.empty()) {
+    log << "warning_reasons:";
+    for (const auto& entry : scene.warning_counts) log << " " << entry.first << "=" << entry.second;
+    log << "\n";
+  }
   log << "package_bytes: " << status.package_bytes << "\n";
   log << "parse_s: " << status.parse_seconds << "\n";
   log << "geometry_s: " << status.geometry_seconds << "\n";
@@ -175,6 +214,13 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
   const auto total_started = std::chrono::steady_clock::now();
   Scene scene;
   bool have_scene = false;
+  struct ScratchGuard {
+    Scene* scene = nullptr;
+    ~ScratchGuard() {
+      if (scene != nullptr) clear_mesh_scratch(*scene);
+    }
+  } scratch_guard;
+  scratch_guard.scene = &scene;
   try {
     if (options.output.empty()) throw std::runtime_error("output path is empty");
     std::size_t cursor = 0;
@@ -213,7 +259,7 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
       status.total_seconds = seconds_between(total_started, std::chrono::steady_clock::now());
       if (!options.output.empty()) {
         status.log_path = log_for(options);
-        write_text(status.log_path, render_log(scene, status));
+        write_text(status.log_path, render_log(scene, status, options));
       }
       emit_json(status, options, &scene);
       return status;
@@ -228,13 +274,13 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
       fill_status(status, scene);
       status.total_seconds = seconds_between(total_started, std::chrono::steady_clock::now());
       status.log_path = log_for(options);
-      write_text(status.log_path, render_log(scene, status));
+      write_text(status.log_path, render_log(scene, status, options));
       emit_json(status, options, &scene);
       return status;
     }
     if (options.lod > 1) {
-      scene.warnings.push_back(
-          "only lod0 is written; lod1/lod2 need meshoptimizer and are left for task Z10");
+      add_warning(scene, "lod_dropped",
+                  "only lod0 is written; lod1/lod2 need meshoptimizer and are left for task Z10");
     }
     const std::string source_name = options.source_name.empty() ? "input.ifc" : options.source_name;
     const auto write_started = std::chrono::steady_clock::now();
@@ -245,7 +291,7 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
     fill_status(status, scene);
     status.total_seconds = seconds_between(total_started, std::chrono::steady_clock::now());
     status.log_path = log_for(options);
-    write_text(status.log_path, render_log(scene, status));
+    write_text(status.log_path, render_log(scene, status, options));
     emit_json(status, options, &scene);
     status.code = 0;
   } catch (const std::exception& ex) {

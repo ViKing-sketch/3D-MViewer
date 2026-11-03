@@ -19,6 +19,15 @@ struct ConvertOptions {
   // analytic: never call IfcOpenShell. ifcopenshell: require the OCCT kernel.
   std::string mesher = "auto";
   int threads = 0;
+  // Caps --threads and the hardware default. 0 means no extra cap.
+  // IfcOpenShell's single-thread iterator stops after the first failed element,
+  // so a cap of 1 is honored only when it is set explicitly.
+  int max_threads = 0;
+  // Mesh bytes kept in RAM before the rest are flushed to disk.
+  // -1 uses the 64 MiB default. 0 flushes every element.
+  // Also limits Open CASCADE threads to about one per 512 MiB, and never below 2
+  // unless --threads 1 or --max-threads 1 was requested.
+  int max_memory_mb = -1;
   bool allow_incomplete = false;
   bool stats = false;
   std::string json_output;
@@ -39,6 +48,7 @@ struct ConvertStatus {
   int threads = 1;
   std::uint64_t package_bytes = 0;
   std::uint64_t peak_rss_bytes = 0;
+  std::uint64_t mesh_bytes_peak = 0;
   double parse_seconds = 0;
   double geometry_seconds = 0;
   double write_seconds = 0;
@@ -48,6 +58,12 @@ struct ConvertStatus {
   bool completeness_ok = true;
   std::string json_body;
 };
+
+// Bytes of triangle data held in RAM before meshes are flushed to scratch files.
+inline std::uint64_t mesh_budget_bytes(const ConvertOptions& options) {
+  if (options.max_memory_mb < 0) return 64ull * 1024ull * 1024ull;
+  return static_cast<std::uint64_t>(options.max_memory_mb) * 1024ull * 1024ull;
+}
 
 ConvertStatus convert_file(const std::string& input_path, const ConvertOptions& options);
 ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& options);
