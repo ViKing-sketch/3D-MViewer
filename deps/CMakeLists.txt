@@ -222,15 +222,20 @@ endif()
 # contains it is left alone. git apply does not need a git checkout of IfcOpenShell.
 set(FBV_IOS_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/ifcopenshell-msvc-memory.patch")
 find_package(Git REQUIRED)
+# The extracted tree sits inside this repo. Without a ceiling, git apply finds the
+# parent .git and exits 0 without changing IfcOpenShell.
+set(FBV_IOS_GIT_ENV "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_SOURCE_DIR}")
 execute_process(
-  COMMAND "${GIT_EXECUTABLE}" apply --check --reverse --whitespace=nowarn "${FBV_IOS_PATCH}"
+  COMMAND ${FBV_IOS_GIT_ENV}
+          "${GIT_EXECUTABLE}" apply --check --reverse --whitespace=nowarn "${FBV_IOS_PATCH}"
   WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
   RESULT_VARIABLE FBV_IOS_ALREADY
   OUTPUT_QUIET ERROR_QUIET
 )
 if(NOT FBV_IOS_ALREADY EQUAL 0)
   execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${FBV_IOS_PATCH}"
+    COMMAND ${FBV_IOS_GIT_ENV}
+            "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${FBV_IOS_PATCH}"
     WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
     RESULT_VARIABLE FBV_IOS_APPLY
     ERROR_VARIABLE FBV_IOS_APPLY_ERR
@@ -245,8 +250,10 @@ else()
 endif()
 
 add_subdirectory("${ifcopenshell_SOURCE_DIR}/cmake" "${ifcopenshell_BINARY_DIR}" EXCLUDE_FROM_ALL)
+# IfcParse is linked with the plain signature inside IfcOpenShell. Mixing in
+# PUBLIC/PRIVATE is a configure error.
 if(TARGET Boost::locale)
-  target_link_libraries(IfcParse PUBLIC Boost::locale)
+  target_link_libraries(IfcParse Boost::locale)
 endif()
 set(BUILD_SHARED_LIBS "${_fbv_shared_libs}")
 
