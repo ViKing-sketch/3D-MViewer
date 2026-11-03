@@ -26,8 +26,10 @@ class FilamentViewport extends StatefulWidget {
     this.isolatedIds = const {},
     this.xray = false,
     this.renderRevision = 0,
+    this.frameToken = 0,
     this.onPick,
     this.onStatus,
+    this.onStandIns,
   });
 
   final S strings;
@@ -39,8 +41,10 @@ class FilamentViewport extends StatefulWidget {
   final Set<int> isolatedIds;
   final bool xray;
   final int renderRevision;
+  final int frameToken;
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
+  final ValueChanged<Set<int>>? onStandIns;
 
   @override
   State<FilamentViewport> createState() => FilamentViewportState();
@@ -49,19 +53,25 @@ class FilamentViewport extends StatefulWidget {
 class FilamentViewportState extends State<FilamentViewport> {
   FilamentCommands? _commands;
   String? _status;
+  int _appliedFrame = 0;
 
-  Future<void> fitAll() => _commands?.fit(selected: false) ?? Future<void>.value();
+  Future<void> fitAll() =>
+      _commands?.fit(selected: false) ?? Future<void>.value();
 
-  Future<void> fitSelected() => _commands?.fit(selected: true) ?? Future<void>.value();
+  Future<void> fitSelected() =>
+      _commands?.fit(selected: true) ?? Future<void>.value();
 
-  Future<void> setCamera(String preset) => _commands?.setCamera(preset) ?? Future<void>.value();
+  Future<void> setCamera(String preset) =>
+      _commands?.setCamera(preset) ?? Future<void>.value();
 
   Future<void> release() => _commands?.release() ?? Future<void>.value();
 
   @override
   void didUpdateWidget(FilamentViewport oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.renderRevision != widget.renderRevision || oldWidget.selectedId != widget.selectedId) {
+    if (oldWidget.renderRevision != widget.renderRevision ||
+        oldWidget.selectedId != widget.selectedId ||
+        oldWidget.frameToken != widget.frameToken) {
       _pushState();
     }
     if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
@@ -92,13 +102,23 @@ class FilamentViewportState extends State<FilamentViewport> {
   }
 
   void _applyStatus(Map<dynamic, dynamic> raw) {
+    final listed = raw['standIns'];
+    if (listed is List) {
+      final ids = <int>{
+        for (final item in listed)
+          if (item is num) item.toInt(),
+      };
+      widget.onStandIns?.call(ids);
+    }
     final code = raw['code']?.toString() ?? '';
     final strings = widget.strings;
     final String text;
     if (code == 'loading') {
       final loaded = (raw['loaded'] as num?)?.toInt() ?? 0;
       final total = (raw['total'] as num?)?.toInt() ?? 0;
-      text = total > 0 ? strings.meshProgress(loaded, total) : strings.loadingMesh;
+      text = total > 0
+          ? strings.meshProgress(loaded, total)
+          : strings.loadingMesh;
     } else if (code == 'ready') {
       text = strings.meshReady(
         lod0: raw['lod0'] == true,
@@ -117,18 +137,25 @@ class FilamentViewportState extends State<FilamentViewport> {
   Future<void> _pushState() async {
     final commands = _commands;
     if (commands == null) return;
+    final frame = widget.frameToken != _appliedFrame;
+    _appliedFrame = widget.frameToken;
     await commands.setViewState(
       selectedId: widget.selectedId,
       hidden: widget.hiddenIds.toList(),
       isolated: widget.isolatedIds.toList(),
       xray: widget.xray,
+      frame: frame,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     if (!Platform.isAndroid || widget.rootPath == null) {
-      return _Fallback(strings: widget.strings, elementCount: widget.elementCount, selectedName: widget.selectedName);
+      return _Fallback(
+        strings: widget.strings,
+        elementCount: widget.elementCount,
+        selectedName: widget.selectedName,
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -176,7 +203,11 @@ class FilamentViewportState extends State<FilamentViewport> {
 }
 
 class _Fallback extends StatelessWidget {
-  const _Fallback({required this.strings, required this.elementCount, required this.selectedName});
+  const _Fallback({
+    required this.strings,
+    required this.elementCount,
+    required this.selectedName,
+  });
 
   final S strings;
   final int elementCount;
@@ -194,10 +225,20 @@ class _Fallback extends StatelessWidget {
           children: [
             Icon(Icons.view_in_ar_outlined, size: 36, color: scheme.primary),
             const SizedBox(height: 8),
-            Text(strings.renderStub, style: Theme.of(context).textTheme.bodyMedium),
+            Text(
+              strings.renderStub,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
             const SizedBox(height: 12),
-            Text('${strings.elements}: $elementCount', style: Theme.of(context).textTheme.titleMedium),
-            if (selectedName != null) Text(selectedName!, style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              '${strings.elements}: $elementCount',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (selectedName != null)
+              Text(
+                selectedName!,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
           ],
         ),
       ),

@@ -68,6 +68,7 @@ class PackageSession {
     String path, {
     void Function(int done, int total)? onProgress,
     void Function(void Function() cancel)? onCancel,
+    bool Function()? isCancelled,
   }) async {
     configureSqlite();
     final entity = FileSystemEntity.typeSync(path);
@@ -83,18 +84,28 @@ class PackageSession {
           onProgress: onProgress,
           onCancel: onCancel,
         );
-        return _openDirectory(
+        await Future<void>.delayed(Duration.zero);
+        if (isCancelled?.call() == true) {
+          throw PackageException('cancelled');
+        }
+        final session = _openDirectory(
           temp.path,
           deleteOnClose: temp,
           isZip: true,
           displayPath: path,
           hashes: hashes,
         );
+        await Future<void>.delayed(Duration.zero);
+        if (isCancelled?.call() == true) {
+          session.close();
+          throw PackageException('cancelled');
+        }
+        return session;
       } on ZipStoreException catch (error) {
-        temp.deleteSync(recursive: true);
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
         throw PackageException(error.message);
       } catch (_) {
-        temp.deleteSync(recursive: true);
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
         rethrow;
       }
     }

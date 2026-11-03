@@ -99,6 +99,9 @@ class ZipStore {
   }
 
   /// Same as [extract], but the copy runs on a background isolate.
+  ///
+  /// [onCancel] receives a function that stops the copy between chunks.
+  /// The returned future then completes with [ZipStoreException] `cancelled`.
   static Future<Map<String, String>> extractAsync(
     File zip,
     Directory dest, {
@@ -110,6 +113,8 @@ class ZipStore {
     final errors = ReceivePort();
     final completer = Completer<Map<String, String>>();
     final spawned = <Isolate>[];
+    SendPort? stopPort;
+    var cancelRequested = false;
     var closed = false;
     void finish() {
       if (closed) return;
@@ -120,6 +125,13 @@ class ZipStore {
     }
 
     void cancel() {
+      cancelRequested = true;
+      final stop = stopPort;
+      if (stop != null) {
+        try {
+          stop.send('stop');
+        } catch (_) {}
+      }
       if (!completer.isCompleted) {
         completer.completeError(ZipStoreException('cancelled'));
       }
@@ -127,15 +139,33 @@ class ZipStore {
     }
 
     receive.listen((message) {
-      if (message is List && message.isNotEmpty && message.first == 'p') {
+      if (message is! List || message.isEmpty) return;
+      final kind = message.first;
+      if (kind == 'inbox') {
+        stopPort = message[1] as SendPort;
+        if (cancelRequested) {
+          try {
+            stopPort?.send('stop');
+          } catch (_) {}
+        }
+        return;
+      }
+      if (kind == 'p') {
         onProgress?.call(message[1] as int, message[2] as int);
         return;
       }
-      if (message is List && message.isNotEmpty && message.first == 'ok') {
+      if (kind == 'ok') {
         final hashes = (message[1] as Map).map(
           (key, value) => MapEntry('$key', '$value'),
         );
         if (!completer.isCompleted) completer.complete(hashes);
+        finish();
+        return;
+      }
+      if (kind == 'err') {
+        if (!completer.isCompleted) {
+          completer.completeError(ZipStoreException('${message[1]}'));
+        }
         finish();
       }
     });
@@ -156,6 +186,72 @@ class ZipStore {
     onCancel?.call(cancel);
     if (completer.isCompleted) finish();
     return completer.future;
+  }
+
+  /// [extract] with a yield after every chunk so [isCancelled] is observed.
+  static Future<Map<String, String>> extractYielding(
+    File zip,
+    Directory dest, {
+    Set<String>? only,
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final raf = zip.openSync();
+    final hashes = <String, String>{};
+    var lastReport = 0;
+    void report(int done, int total, {bool force = false}) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (!force && done != total && now - lastReport < 100) return;
+      lastReport = now;
+      onProgress?.call(done, total);
+    }
+
+    try {
+      final entries = _centralDirectory(raf).where((entry) {
+        if (entry.isDirectory) return false;
+        if (only != null && !only.contains(entry.name)) return false;
+        return true;
+      }).toList();
+      var total = 0;
+      for (final entry in entries) {
+        total += entry.size;
+      }
+      var done = 0;
+      report(done, total, force: true);
+      for (final entry in entries) {
+        if (isCancelled?.call() == true) {
+          throw ZipStoreException('cancelled');
+        }
+        if (entry.method != 0) {
+          throw ZipStoreException('ZIP entry ${entry.name} is not STORE');
+        }
+        final out = _safeFile(dest, entry.name);
+        out.parent.createSync(recursive: true);
+        hashes[entry.name] = await _copyEntryYielding(
+          raf,
+          entry,
+          out,
+          isCancelled: isCancelled,
+          onChunk: (copied) => report(done + copied, total),
+        );
+        done += entry.size;
+        report(done, total, force: true);
+        await Future<void>.delayed(Duration.zero);
+        if (isCancelled?.call() == true) {
+          throw ZipStoreException('cancelled');
+        }
+      }
+      if (only != null) {
+        for (final name in only) {
+          if (!hashes.containsKey(name)) {
+            throw ZipStoreException('В архиве нет $name');
+          }
+        }
+      }
+      return hashes;
+    } finally {
+      raf.closeSync();
+    }
   }
 
   static String hashFile(File file) {
@@ -299,6 +395,52 @@ class ZipStore {
     return digest.toString();
   }
 
+  static Future<String> _copyEntryYielding(
+    RandomAccessFile raf,
+    ZipEntryInfo entry,
+    File out, {
+    bool Function()? isCancelled,
+    void Function(int copied)? onChunk,
+  }) async {
+    raf.setPositionSync(entry.localOffset);
+    final header = raf.readSync(30);
+    if (header.length != 30 || _u32(header, 0) != 0x04034b50) {
+      throw ZipStoreException('Нет локального заголовка ${entry.name}');
+    }
+    final nameLen = _u16(header, 26);
+    final extraLen = _u16(header, 28);
+    raf.setPositionSync(raf.positionSync() + nameLen + extraLen);
+    final sink = out.openSync(mode: FileMode.write);
+    final hashSink = _OneDigest();
+    final input = sha256.startChunkedConversion(hashSink);
+    try {
+      var left = entry.size;
+      var copied = 0;
+      while (left > 0) {
+        if (isCancelled?.call() == true) {
+          throw ZipStoreException('cancelled');
+        }
+        final n = left < chunkSize ? left : chunkSize;
+        final bytes = raf.readSync(n);
+        if (bytes.length != n) {
+          throw ZipStoreException('Обрыв данных ${entry.name}');
+        }
+        sink.writeFromSync(bytes);
+        input.add(bytes);
+        left -= n;
+        copied += n;
+        onChunk?.call(copied);
+        await Future<void>.delayed(Duration.zero);
+      }
+    } finally {
+      sink.closeSync();
+    }
+    input.close();
+    final digest = hashSink.digest;
+    if (digest == null) throw ZipStoreException('Пустой хэш ${entry.name}');
+    return digest.toString();
+  }
+
   static File _safeFile(Directory dest, String name) {
     _rejectName(name);
     final parts = name.split('/').where((part) => part.isNotEmpty).toList();
@@ -343,13 +485,28 @@ class _ExtractArgs {
 }
 
 void _extractOffUi(_ExtractArgs args) {
-  final hashes = ZipStore.extract(
-    File(args.zipPath),
-    Directory(args.destPath),
-    only: args.only?.toSet(),
-    onProgress: (done, total) => args.send.send(<Object>['p', done, total]),
-  );
-  args.send.send(<Object>['ok', hashes]);
+  final inbox = ReceivePort();
+  var cancelled = false;
+  inbox.listen((message) {
+    if (message == 'stop') cancelled = true;
+  });
+  args.send.send(<Object>['inbox', inbox.sendPort]);
+  unawaited(() async {
+    try {
+      final hashes = await ZipStore.extractYielding(
+        File(args.zipPath),
+        Directory(args.destPath),
+        only: args.only?.toSet(),
+        isCancelled: () => cancelled,
+        onProgress: (done, total) => args.send.send(<Object>['p', done, total]),
+      );
+      args.send.send(<Object>['ok', hashes]);
+    } catch (error) {
+      args.send.send(<Object>['err', '$error']);
+    } finally {
+      inbox.close();
+    }
+  }());
 }
 
 class _OneDigest implements Sink<Digest> {

@@ -78,6 +78,7 @@ void main() {
     expect(view['hidden'], [1]);
     expect(view['isolated'], [2]);
     expect(view['xray'], isTrue);
+    expect(view['frame'], isFalse);
     expect((calls[2].arguments as Map)['selected'], isTrue);
     expect((calls[3].arguments as Map)['preset'], 'top');
   });

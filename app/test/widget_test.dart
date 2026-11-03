@@ -18,7 +18,8 @@ Future<void> pumpFor(WidgetTester tester, Finder finder) async {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
-    await tester.pump();
+    // Elapse the fake clock so a post-extract yield can resume.
+    await tester.pump(const Duration(milliseconds: 16));
     if (finder.evaluate().isNotEmpty) return;
   }
 }
@@ -75,7 +76,13 @@ void main() {
     );
     expect(find.text('КСИ'), findsOneWidget);
 
-    await tester.enterText(find.byType(TextField), 'W-1');
+    await tester.enterText(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+      }),
+      'W-1',
+    );
     await tester.pump();
     expect(find.text('Wall W-1'), findsWidgets);
     expect(find.text('Column C-1'), findsNothing);
@@ -89,8 +96,13 @@ void main() {
   testWidgets('zip package opens the same project', (tester) async {
     final zip = _repoFile('testdata/sample_wall.fbvpkg');
     await tester.pumpWidget(FieldBimApp(autoOpenPath: zip));
-    await pumpFor(tester, find.text('Slab S-1'));
+    await pumpFor(tester, find.text('Sample Project'));
     expect(find.text('Sample Project'), findsWidgets);
+    if (find.text('Slab S-1').evaluate().isEmpty) {
+      await tester.tap(find.text('Дерево'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
     expect(find.text('Slab S-1'), findsOneWidget);
   });
 
@@ -153,5 +165,54 @@ void main() {
     await tester.pump();
     expect(find.text('open-model'), findsOneWidget);
     expect(find.text('Wall W-1'), findsNothing);
+  });
+
+  testWidgets('phone portrait separates the tree and the properties sheet', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    expect(find.text('3D'), findsOneWidget);
+    expect(find.text('Дерево'), findsOneWidget);
+    expect(find.text('Выберите элемент'), findsOneWidget);
+
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+    expect(find.text('Wall W-1'), findsOneWidget);
+    await tester.ensureVisible(find.text('Wall W-1'));
+    await tester.tap(find.text('Wall W-1'));
+    await tester.pump();
+    await tester.tap(find.text('3D'));
+    await tester.pumpAndSettle();
+    expect(find.text('Свойства'), findsOneWidget);
+    await tester.drag(find.text('Свойства'), const Offset(0, -420));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Марка'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('phone landscape keeps properties beside the view', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 390);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    expect(find.text('3D'), findsOneWidget);
+    expect(find.text('Выберите элемент'), findsOneWidget);
+    await tester.tap(find.text('Дерево'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Wall W-1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

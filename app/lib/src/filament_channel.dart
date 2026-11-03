@@ -11,7 +11,9 @@ class FilamentCommands {
 
   Future<Map<String, dynamic>?> sync() async {
     final value = await channel.invokeMethod<dynamic>('sync');
-    if (value is Map) return value.map((key, item) => MapEntry(key.toString(), item));
+    if (value is Map) {
+      return value.map((key, item) => MapEntry(key.toString(), item));
+    }
     return null;
   }
 
@@ -30,12 +32,14 @@ class FilamentCommands {
     required List<int> hidden,
     required List<int> isolated,
     required bool xray,
+    bool frame = false,
   }) {
     return channel.invokeMethod<void>('setViewState', {
       'selected': selectedId ?? 0,
       'hidden': hidden,
       'isolated': isolated,
       'xray': xray,
+      'frame': frame,
     });
   }
 

@@ -12,6 +12,13 @@ class S {
       russian ? 'Пакетов не найдено' : 'No packages found';
   String get properties => russian ? 'Свойства' : 'Properties';
   String get specification => russian ? 'Спецификация' : 'Specification';
+  String get view3d => '3D';
+  String get tree => russian ? 'Дерево' : 'Tree';
+  String get standIns => russian ? 'Заглушки' : 'Stand-ins';
+  String get standInHint => russian
+      ? 'Нажмите, чтобы показать заглушку и загрузить её GLB'
+      : 'Tap to frame a stand-in and stream its GLB';
+  String get propertySearch => russian ? 'Поиск свойства' : 'Search properties';
   String get searchHint =>
       russian ? 'Имя, марка, GlobalId' : 'Name, tag, GlobalId';
   String get renderStub => russian

@@ -39,6 +39,10 @@ class _ModelPageState extends State<ModelPage>
   bool _cancel = false;
   int _extractDone = 0;
   int _extractTotal = 0;
+  int _frameToken = 0;
+  String _propQuery = '';
+  final Set<String> _collapsedGroups = {};
+  Set<int> _standIns = {};
   void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
   late final TabController _tabs;
@@ -46,7 +50,7 @@ class _ModelPageState extends State<ModelPage>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 3, vsync: this);
     final type = FileSystemEntity.typeSync(widget.path);
     if (type == FileSystemEntityType.file) {
       _opening = true;
@@ -69,11 +73,16 @@ class _ModelPageState extends State<ModelPage>
   }
 
   Future<void> _openZip() async {
+    var lastPaint = 0;
     try {
       final session = await PackageSession.openPathAsync(
         widget.path,
+        isCancelled: () => _cancel,
         onProgress: (done, total) {
           if (!mounted || _cancel) return;
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (done != total && now - lastPaint < 120) return;
+          lastPaint = now;
           setState(() {
             _extractDone = done;
             _extractTotal = total;
@@ -84,6 +93,7 @@ class _ModelPageState extends State<ModelPage>
           if (_cancel) cancel();
         },
       );
+      await Future<void>.delayed(Duration.zero);
       if (_cancel || _left || !mounted) {
         session.close();
         return;
@@ -104,22 +114,26 @@ class _ModelPageState extends State<ModelPage>
     }
   }
 
-  /// System back and the app bar both come here. The route stays up until the
-  /// GPU scene is released, so the extracted files are not deleted while a
-  /// mapped GLB is still in use.
+  /// System back and the app bar both come here. Cancel is recorded before any
+  /// await so unzip, sqlite open and mesh upload all observe it. The platform
+  /// view is removed in the same turn the release message is sent, otherwise
+  /// the SurfaceView covers the overlay and dispose drops the channel.
   Future<void> _leave() async {
     if (_left || _closing) return;
-    if (!mounted || !Navigator.of(context).canPop()) return;
-    setState(() => _closing = true);
     _cancel = true;
+    _closing = true;
     _cancelExtract?.call();
+    final releasing = _viewport.currentState?.release() ?? Future<void>.value();
+    if (mounted) setState(() {});
     try {
-      await _viewport.currentState?.release();
+      await releasing;
     } catch (_) {}
     _session?.close();
     _session = null;
     _left = true;
-    if (mounted) Navigator.of(context).pop();
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
   }
 
   @override
@@ -146,6 +160,28 @@ class _ModelPageState extends State<ModelPage>
       _selectedId = id;
       _renderRevision++;
     });
+  }
+
+  void _onStandIns(Set<int> ids) {
+    if (!mounted || _sameIds(_standIns, ids)) return;
+    setState(() => _standIns = ids);
+  }
+
+  void _jumpTo(int id) {
+    setState(() {
+      _selectedId = id;
+      _renderRevision++;
+      _frameToken++;
+    });
+    if (_tabs.index != 0) _tabs.animateTo(0);
+  }
+
+  bool _sameIds(Set<int> a, Set<int> b) {
+    if (a.length != b.length) return false;
+    for (final id in a) {
+      if (!b.contains(id)) return false;
+    }
+    return true;
   }
 
   void _hideSelected() {
@@ -256,27 +292,37 @@ class _ModelPageState extends State<ModelPage>
           leading: BackButton(onPressed: () => unawaited(_leave())),
           automaticallyImplyLeading: false,
           title: Text(_session?.summary.name ?? strings.appTitle),
-          bottom: TabBar(
-            controller: _tabs,
-            tabs: [
-              Tab(text: strings.library),
-              Tab(text: strings.specification),
-            ],
-          ),
+          bottom: _session == null || _opening
+              ? null
+              : TabBar(
+                  controller: _tabs,
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  tabs: [
+                    Tab(text: strings.view3d),
+                    Tab(text: strings.tree),
+                    Tab(text: strings.specification),
+                  ],
+                ),
         ),
         floatingActionButton: const AppearanceButtons(tag: 'model'),
         body: Stack(
           children: [
-            Positioned.fill(
-              child: _error != null
-                  ? Center(child: Text(_error!))
-                  : _opening || _session == null
-                  ? _extracting(strings)
-                  : TabBarView(
-                      controller: _tabs,
-                      children: [_modelTab(context), _specTab(context)],
-                    ),
-            ),
+            if (!_closing)
+              Positioned.fill(
+                child: _error != null
+                    ? Center(child: Text(_error!))
+                    : _opening || _session == null
+                    ? _extracting(strings)
+                    : TabBarView(
+                        controller: _tabs,
+                        children: [
+                          _viewTab(context),
+                          _treeTab(context),
+                          _specTab(context),
+                        ],
+                      ),
+              ),
             if (_closing)
               const Positioned.fill(
                 child: ModalBarrier(
@@ -327,110 +373,182 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _modelTab(BuildContext context) {
+  Widget _viewTab(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 1100;
+        final landscape = !wide && constraints.maxWidth > constraints.maxHeight;
+        final selected = _selected;
+        final viewport = _viewportOf(selected);
+        if (wide) return _wideWorkspace(context, viewport, selected);
+        if (landscape) return _landscapeView(context, viewport, selected);
+        return _portraitView(context, viewport, selected);
+      },
+    );
+  }
+
+  Widget _wideWorkspace(
+    BuildContext context,
+    Widget viewport,
+    ElementInfo? selected,
+  ) {
     final strings = widget.strings;
-    final classes = {..._elements.map((e) => e.ifcClass)}.toList()..sort();
-    final selected = _selected;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-          child: TextField(
-            decoration: InputDecoration(
-              hintText: strings.searchHint,
-              prefixIcon: const Icon(Icons.search),
-              border: const OutlineInputBorder(),
-            ),
-            onChanged: (value) => setState(() => _query = value),
-          ),
-        ),
-        SizedBox(
-          height: 56,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        _elementSearch(strings),
+        _classChips(strings),
+        Expanded(
+          child: Row(
             children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: FilterChip(
-                  label: Text(strings.allClasses),
-                  selected: _classFilter == null,
-                  onSelected: (_) => setState(() => _classFilter = null),
+              SizedBox(width: 320, child: _tree(context)),
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(child: viewport),
+                    _renderBar(strings),
+                  ],
                 ),
               ),
-              for (final name in classes)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: FilterChip(
-                    label: Text(name),
-                    selected: _classFilter == name,
-                    onSelected: (_) => setState(() => _classFilter = name),
-                  ),
-                ),
+              SizedBox(width: 340, child: _properties(context, selected)),
             ],
           ),
         ),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 1100;
-              // The default widget surface leaves about 370px here. A 320px
-              // view plus the property pane overflows that and the tree never
-              // lays out. Short windows keep the original 96px slot.
-              final short = !wide && constraints.maxHeight < 520;
-              final filament = FilamentViewport(
-                key: _viewport,
-                strings: strings,
-                rootPath: _session?.rootPath,
-                elementCount: _elements.length,
-                selectedName: selected?.name,
-                selectedId: _selectedId,
-                hiddenIds: _hidden,
-                isolatedIds: _isolated,
-                xray: _xray,
-                renderRevision: _renderRevision,
-                onPick: _choose,
-              );
-              final viewport = short
-                  ? Stack(
-                      children: [
-                        Positioned.fill(child: filament),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: _renderBar(strings),
-                        ),
-                      ],
-                    )
-                  : Column(
-                      children: [
-                        Expanded(child: filament),
-                        _renderBar(strings),
-                      ],
-                    );
-              final tree = _tree(context);
-              final props = _properties(context, selected);
-              if (wide) {
-                return Row(
-                  children: [
-                    SizedBox(width: 320, child: tree),
-                    Expanded(child: viewport),
-                    SizedBox(width: 340, child: props),
-                  ],
-                );
-              }
-              return Column(
-                children: [
-                  SizedBox(height: short ? 96 : 320, child: viewport),
-                  Expanded(child: tree),
-                  SizedBox(height: 160, child: props),
-                ],
-              );
-            },
-          ),
+      ],
+    );
+  }
+
+  Widget _portraitView(
+    BuildContext context,
+    Widget viewport,
+    ElementInfo? selected,
+  ) {
+    final strings = widget.strings;
+    return Stack(
+      children: [
+        Column(
+          children: [
+            _renderBar(strings),
+            Expanded(child: viewport),
+          ],
+        ),
+        DraggableScrollableSheet(
+          initialChildSize: 0.22,
+          minChildSize: 0.12,
+          maxChildSize: 0.88,
+          snap: true,
+          snapSizes: const [0.22, 0.55, 0.88],
+          builder: (context, controller) {
+            return Material(
+              elevation: 8,
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: _properties(context, selected, controller: controller),
+            );
+          },
         ),
       ],
+    );
+  }
+
+  Widget _landscapeView(
+    BuildContext context,
+    Widget viewport,
+    ElementInfo? selected,
+  ) {
+    final strings = widget.strings;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final side = (constraints.maxWidth * 0.46).clamp(0.0, 380.0).toDouble();
+        return Column(
+          children: [
+            _renderBar(strings),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: viewport),
+                  SizedBox(width: side, child: _properties(context, selected)),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _treeTab(BuildContext context) {
+    final strings = widget.strings;
+    return Column(
+      children: [
+        _elementSearch(strings),
+        _classChips(strings),
+        Expanded(child: _tree(context)),
+      ],
+    );
+  }
+
+  Widget _elementSearch(S strings) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: TextField(
+        decoration: InputDecoration(
+          hintText: strings.searchHint,
+          prefixIcon: const Icon(Icons.search),
+          border: const OutlineInputBorder(),
+        ),
+        onChanged: (value) => setState(() => _query = value),
+      ),
+    );
+  }
+
+  Widget _classChips(S strings) {
+    final classes = {..._elements.map((e) => e.ifcClass)}.toList()..sort();
+    return SizedBox(
+      height: 56,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilterChip(
+              label: Text(strings.allClasses),
+              selected: _classFilter == null,
+              onSelected: (_) => setState(() => _classFilter = null),
+            ),
+          ),
+          for (final name in classes)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                label: Text(name),
+                selected: _classFilter == name,
+                onSelected: (_) => setState(() => _classFilter = name),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _viewportOf(ElementInfo? selected) {
+    return FilamentViewport(
+      key: _viewport,
+      strings: widget.strings,
+      rootPath: _session?.rootPath,
+      elementCount: _elements.length,
+      selectedName: selected?.name,
+      selectedId: _selectedId,
+      hiddenIds: _hidden,
+      isolatedIds: _isolated,
+      xray: _xray,
+      renderRevision: _renderRevision,
+      frameToken: _frameToken,
+      onPick: _choose,
+      onStandIns: _onStandIns,
     );
   }
 
@@ -438,6 +556,7 @@ class _ModelPageState extends State<ModelPage>
     final roots = _spatial.where((node) => node.parentId == 0).toList();
     return ListView(
       children: [
+        ..._standInTiles(context),
         for (final node in roots) _spatialTile(node),
         for (final element in _elements.where(
           (e) => e.parentId == 0 && _visible(e),
@@ -447,13 +566,48 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  List<Widget> _standInTiles(BuildContext context) {
+    if (_standIns.isEmpty) return const [];
+    final strings = widget.strings;
+    final known = {for (final element in _elements) element.id: element};
+    final ids = _standIns.toList()..sort();
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Text(
+          strings.standIns,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Text(strings.standInHint),
+      ),
+      for (final id in ids)
+        ListTile(
+          minTileHeight: 48,
+          leading: const Icon(Icons.crop_square, color: Color(0xFFF2741F)),
+          title: Text(_elementLabel(known[id], id)),
+          subtitle: Text(known[id]?.ifcClass ?? ''),
+          onTap: () => _jumpTo(id),
+        ),
+    ];
+  }
+
+  String _elementLabel(ElementInfo? element, int id) {
+    if (element == null) return '$id';
+    if (element.name.isNotEmpty) return element.name;
+    if (element.ifcClass.isNotEmpty) return element.ifcClass;
+    return '$id';
+  }
+
   Widget _spatialTile(SpatialNode node) {
     final children = _spatial.where((item) => item.parentId == node.id);
     final elements = _elements.where(
       (item) => item.parentId == node.id && _visible(item),
     );
     return ExpansionTile(
-      initiallyExpanded: true,
+      initiallyExpanded: _elements.length <= 200,
       title: Text(node.name.isEmpty ? node.kind : node.name),
       subtitle: Text(node.kind),
       children: [
@@ -474,60 +628,150 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _properties(BuildContext context, ElementInfo? element) {
+  Widget _properties(
+    BuildContext context,
+    ElementInfo? element, {
+    ScrollController? controller,
+  }) {
     final strings = widget.strings;
     if (element == null || _session == null) {
-      return Center(child: Text(strings.noSelection));
+      return CustomScrollView(
+        controller: controller,
+        slivers: [
+          if (controller != null) _sheetHandle(),
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: Text(strings.noSelection)),
+          ),
+        ],
+      );
     }
     final props = _session!.props(element.id);
     final quantities = _session!.quantities(element.id);
     final classes = _session!.classes(element.id);
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Text(
-          strings.properties,
-          style: Theme.of(context).textTheme.titleMedium,
+    final query = _propQuery.trim().toLowerCase();
+    bool hit(String name, String group, String value) {
+      if (query.isEmpty) return true;
+      return name.toLowerCase().contains(query) ||
+          group.toLowerCase().contains(query) ||
+          value.toLowerCase().contains(query);
+    }
+
+    final groups = <String, List<Widget>>{};
+    for (final prop in props) {
+      final value = _displayValue(prop.valueText);
+      final group = prop.pset.isEmpty ? strings.properties : prop.pset;
+      if (!hit(prop.name, group, value)) continue;
+      groups
+          .putIfAbsent(group, () => [])
+          .add(_valueRow(prop.name, prop.pset, value));
+    }
+    final quantityRows = <Widget>[
+      for (final quantity in quantities)
+        if (hit(quantity.name, quantity.qset, _displayQuantity(quantity)))
+          _valueRow(quantity.name, quantity.qset, _displayQuantity(quantity)),
+    ];
+    final classRows = <Widget>[
+      for (final item in classes)
+        if (hit(item.code, item.system, item.title))
+          _valueRow(item.code, item.system, item.title),
+    ];
+    return SelectionArea(
+      child: CustomScrollView(
+        controller: controller,
+        slivers: [
+          if (controller != null) _sheetHandle(),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    strings.properties,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    decoration: InputDecoration(
+                      hintText: strings.propertySearch,
+                      prefixIcon: const Icon(Icons.search),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (value) => setState(() => _propQuery = value),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(element.guid),
+                  if (element.tag.isNotEmpty) Text(element.tag),
+                  if (element.typeName.isNotEmpty) Text(element.typeName),
+                  if (element.material.isNotEmpty) Text(element.material),
+                ],
+              ),
+            ),
+          ),
+          for (final entry in groups.entries) ..._group(entry.key, entry.value),
+          if (quantityRows.isNotEmpty)
+            ..._group(strings.quantities, quantityRows),
+          if (classRows.isNotEmpty)
+            ..._group(strings.classification, classRows),
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        ],
+      ),
+    );
+  }
+
+  Widget _sheetHandle() {
+    return SliverToBoxAdapter(
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 4,
+          margin: const EdgeInsets.only(top: 8, bottom: 4),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
-        Text(element.guid),
-        if (element.tag.isNotEmpty) Text(element.tag),
-        if (element.typeName.isNotEmpty) Text(element.typeName),
-        if (element.material.isNotEmpty) Text(element.material),
-        const Divider(),
-        for (final prop in props)
-          ListTile(
-            minTileHeight: 48,
-            title: Text(prop.name),
-            subtitle: Text(prop.pset),
-            trailing: Text(_displayValue(prop.valueText)),
-          ),
-        if (quantities.isNotEmpty) ...[
-          Text(
-            strings.quantities,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          for (final quantity in quantities)
-            ListTile(
-              minTileHeight: 48,
-              title: Text(quantity.name),
-              subtitle: Text(quantity.qset),
-              trailing: Text(_displayQuantity(quantity)),
-            ),
+      ),
+    );
+  }
+
+  List<Widget> _group(String title, List<Widget> rows) {
+    final expanded = !_collapsedGroups.contains(title);
+    return [
+      SliverPersistentHeader(
+        pinned: true,
+        delegate: _GroupHeader(
+          title: title,
+          expanded: expanded,
+          onTap: () {
+            setState(() {
+              if (expanded) {
+                _collapsedGroups.add(title);
+              } else {
+                _collapsedGroups.remove(title);
+              }
+            });
+          },
+        ),
+      ),
+      if (expanded) SliverList(delegate: SliverChildListDelegate(rows)),
+    ];
+  }
+
+  Widget _valueRow(String name, String group, String value) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(name),
+          if (group.isNotEmpty) Text(group, style: theme.textTheme.bodySmall),
+          Text(value),
         ],
-        if (classes.isNotEmpty) ...[
-          Text(
-            strings.classification,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          for (final item in classes)
-            ListTile(
-              minTileHeight: 48,
-              title: Text(item.code),
-              subtitle: Text(item.system),
-              trailing: Text(item.title),
-            ),
-        ],
-      ],
+      ),
     );
   }
 
@@ -591,5 +835,67 @@ class _ModelPageState extends State<ModelPage>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(file.path)));
+  }
+}
+
+class _GroupHeader extends SliverPersistentHeaderDelegate {
+  _GroupHeader({
+    required this.title,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  final String title;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  @override
+  double get minExtent => 48;
+
+  @override
+  double get maxExtent => 48;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      height: 48,
+      width: double.infinity,
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHigh,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(
+                  expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: theme.textTheme.titleSmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(_GroupHeader oldDelegate) {
+    return oldDelegate.title != title || oldDelegate.expanded != expanded;
   }
 }

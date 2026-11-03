@@ -114,7 +114,10 @@ class FilamentPlatformView(
 
     private val assets = ArrayList<FilamentAsset>()
     private val proxyAssets = HashSet<FilamentAsset>()
+    private val previewAssets = HashSet<FilamentAsset>()
     private val proxyEntities = HashSet<Int>()
+    private val bufferQueue = ArrayList<PendingGlb>()
+    private val tinted = HashMap<Int, MaterialInstance>()
     private val streams = ArrayList<FileInputStream>()
     private val mappedBuffers = ArrayList<MappedByteBuffer>()
     private val elementByEntity = HashMap<Int, Long>()
@@ -160,6 +163,7 @@ class FilamentPlatformView(
     private val standInIds = HashSet<Long>()
     private var uploadsDone = 0
     private var uploadsTotal = 0
+    private var lastUploadLog = 0L
 
     private val frameCallback: Choreographer.FrameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -287,6 +291,7 @@ class FilamentPlatformView(
                 val nextHidden = longSet(call.argument<List<*>>("hidden"))
                 val nextIsolated = longSet(call.argument<List<*>>("isolated"))
                 val nextXray = call.argument<Boolean>("xray") == true
+                val frameSelected = call.argument<Boolean>("frame") == true
                 renderHandler.post {
                     if (destroyed) return@post
                     selected = nextSelected
@@ -295,6 +300,7 @@ class FilamentPlatformView(
                     xray = nextXray
                     ensureSelected(selected)
                     applyVisibility()
+                    if (frameSelected && selected != 0L) frame(selectedBox(), preset)
                     if (sceneArmed) pumpQueue()
                 }
                 result.success(null)
@@ -323,6 +329,7 @@ class FilamentPlatformView(
     private fun releaseScene(result: MethodChannel.Result) {
         generation.incrementAndGet()
         loadingRoot = null
+        Log.i(TAG, "cancel requested")
         renderHandler.post {
             try {
                 sceneArmed = false
@@ -456,22 +463,25 @@ class FilamentPlatformView(
             geomsU[id] = clamped.upright()
         }
         val heavy = geomsZ.size > 80 || (lod0.isFile && lod0Bytes >= 8L * 1024 * 1024)
-        val display = ArrayList<ElementGeom>()
+        val previewGeoms = ArrayList<ElementGeom>()
         if (heavy) {
-            display.addAll(geomsZ.values)
-        } else {
-            for (id in standIn) {
-                val geom = geomsZ[id] ?: continue
-                display.add(geom)
+            for (geom in geomsZ.values) {
+                if (geom.id !in standIn) previewGeoms.add(geom)
             }
         }
-        val proxy = ProxyBoxes.build(display)
+        val standGeoms = ArrayList<ElementGeom>()
+        for (id in standIn) {
+            val geom = geomsZ[id] ?: continue
+            standGeoms.add(geom)
+        }
+        val preview = ProxyBoxes.build(previewGeoms)
+        val proxy = ProxyBoxes.build(standGeoms)
         val partial = (lod0.isFile && !useLod0) || standIn.isNotEmpty()
-        if (gpu.isEmpty() && proxy == null) error("mesh/lod0.glb was not found")
+        if (gpu.isEmpty() && proxy == null && preview == null) error("mesh/lod0.glb was not found")
         Log.i(
             TAG,
             "plan lod0=$useLod0 files=${gpu.size} standIns=${standIn.size} " +
-                "fitSpan=$span preview=${display.size}",
+                "fitSpan=$span preview=${previewGeoms.size}",
         )
         return LoadPlan(
             gpu,
@@ -483,6 +493,7 @@ class FilamentPlatformView(
             budget,
             deferredFiles,
             proxy,
+            preview,
             standIn,
         )
     }
@@ -511,8 +522,12 @@ class FilamentPlatformView(
         gpuQueue.addAll(plan.files)
         uploadsDone = 0
         uploadsTotal = plan.files.size
+        lastUploadLog = 0L
         activeAsset = null
         activeStarted = false
+        bufferQueue.clear()
+        plan.preview?.let { bufferQueue.add(PendingGlb(it.buffer, preview = true)) }
+        plan.proxy?.let { bufferQueue.add(PendingGlb(it.buffer, preview = false)) }
         sceneArmed = true
         val fit = SceneBounds.union(records.values, standInIds)
         if (fit != null) {
@@ -525,18 +540,14 @@ class FilamentPlatformView(
             Log.i(TAG, "fit empty elements=${records.size} standIns=${standInIds.size}")
         }
         frame(fit, preset)
-        val proxy = plan.proxy
-        if (proxy != null) {
-            retainedBuffers.add(proxy.buffer)
-            val asset = openBuffer(proxy.buffer)
-            if (asset != null) startLoad(asset, proxy = true)
-        }
+        plan.preview?.let { retainedBuffers.add(it.buffer) }
+        plan.proxy?.let { retainedBuffers.add(it.buffer) }
         reportProgress()
-        if (activeAsset == null) pumpQueue()
+        pumpQueue()
     }
 
     private fun pumpQueue() {
-        if (destroyed || !sceneArmed) return
+        if (destroyed || !sceneArmed || generation.get() != beginTicket) return
         if (activeAsset != null && activeStarted) {
             val progress = resourceLoader.asyncGetLoadProgress()
             if (progress < 0.999f && progress < 99.9f) return
@@ -558,13 +569,25 @@ class FilamentPlatformView(
                             "partial" to partialScene,
                             "boxes" to boxCount,
                             "budget" to budgetBytes,
+                            "standIns" to pendingStandIns(),
                         ),
+                    )
+                    Log.i(
+                        TAG,
+                        "upload finished files=$uploadsDone total=$uploadsTotal " +
+                            "standIns=${pendingStandIns().size} partial=$partialScene",
                     )
                 }
                 return
             }
         }
         if (destroyed || !sceneArmed || generation.get() != beginTicket) return
+        if (bufferQueue.isNotEmpty()) {
+            val pending = bufferQueue.removeAt(0)
+            val asset = openBuffer(pending.buffer)
+            if (asset != null) startLoad(asset, proxy = true, preview = pending.preview)
+            return
+        }
         val file = gpuQueue.removeAt(0)
         val asset = openAsset(file)
         if (asset == null) {
@@ -588,11 +611,16 @@ class FilamentPlatformView(
                 "total" to uploadsTotal,
                 "partial" to partialScene,
                 "boxes" to boxCount,
+                "standIns" to pendingStandIns(),
             ),
         )
     }
 
-    private fun startLoad(asset: FilamentAsset, proxy: Boolean): Boolean {
+    private fun pendingStandIns(): List<Long> {
+        return standInIds.filter { deferred.containsKey(it) }.sorted()
+    }
+
+    private fun startLoad(asset: FilamentAsset, proxy: Boolean, preview: Boolean = false): Boolean {
         if (destroyed || !sceneArmed || generation.get() != beginTicket) {
             try {
                 assetLoader.destroyAsset(asset)
@@ -601,12 +629,24 @@ class FilamentPlatformView(
             return false
         }
         if (proxy) proxyAssets.add(asset)
+        if (preview) previewAssets.add(asset)
         assets.add(asset)
         applyRootTurn(asset)
         index(asset)
         rememberBounds(asset)
-        resourceLoader.asyncBeginLoad(asset)
+        val started = try {
+            resourceLoader.asyncBeginLoad(asset)
+        } catch (error: Exception) {
+            Log.w(TAG, "asyncBeginLoad failed: ${error.message}")
+            false
+        }
         asset.releaseSourceData()
+        if (!started) {
+            Log.w(TAG, "asyncBeginLoad returned false")
+            activeAsset = null
+            activeStarted = false
+            return true
+        }
         activeAsset = asset
         activeStarted = true
         return true
@@ -639,6 +679,7 @@ class FilamentPlatformView(
                 "lastStreamed" to id,
                 "loaded" to uploadsDone,
                 "total" to uploadsTotal,
+                "standIns" to pendingStandIns(),
             ),
         )
         val drop = elementByEntity.filterValues { it in ids }.keys.toList()
@@ -746,21 +787,26 @@ class FilamentPlatformView(
         releaseRetiredProxies()
     }
 
-    /** Drop the preview asset once every stand-in has a real mesh. */
+    /** Drop preview boxes once their elements have a real mesh. Stand-ins stay. */
     private fun releaseRetiredProxies() {
-        if (!engineAlive || proxyEntities.isNotEmpty() || proxyAssets.isEmpty()) return
-        val drop = proxyAssets.filter { it != activeAsset }
+        if (!engineAlive || previewAssets.isEmpty()) return
+        val drop = ArrayList<FilamentAsset>()
+        for (asset in previewAssets) {
+            if (asset == activeAsset) continue
+            val still = asset.entities.any { it != 0 && it in proxyEntities }
+            if (!still) drop.add(asset)
+        }
         if (drop.isEmpty()) return
         for (asset in drop) {
             assets.remove(asset)
+            proxyAssets.remove(asset)
+            previewAssets.remove(asset)
             try {
                 scene.removeEntities(asset.entities)
                 assetLoader.destroyAsset(asset)
             } catch (_: Exception) {
             }
         }
-        proxyAssets.removeAll(drop.toSet())
-        if (proxyAssets.isEmpty()) retainedBuffers.clear()
         Log.i(TAG, "released preview proxies=${drop.size}")
     }
 
@@ -821,6 +867,7 @@ class FilamentPlatformView(
         assetLoader.gc()
         populate()
         pumpQueue()
+        logUploadHeartbeat(frameTimeNanos)
         if (renderer.beginFrame(swapChain!!, frameTimeNanos)) {
             renderer.render(view)
             renderer.endFrame()
@@ -865,11 +912,20 @@ class FilamentPlatformView(
             if (instance == 0 || !show) continue
             val original = originals.getOrPut(entity) { rm.getMaterialInstanceAt(instance, 0) }
             val ghost = xray && id != selected && xrayInstance != null
+            val standIn = id in standInIds && deferred.containsKey(id)
             if (ghost) {
                 rm.setMaterialInstanceAt(instance, 0, xrayInstance!!)
+            } else if (id == selected || standIn) {
+                val color = if (id == selected) HIGHLIGHT else STAND_IN
+                val painted = paintCopy(entity, original)
+                rm.setMaterialInstanceAt(instance, 0, painted)
+                try {
+                    painted.setParameter("baseColorFactor", color[0], color[1], color[2], color[3])
+                } catch (_: Exception) {
+                }
             } else {
                 rm.setMaterialInstanceAt(instance, 0, original)
-                val color = if (id == selected) HIGHLIGHT else records[id]?.color
+                val color = records[id]?.color
                 if (color != null) {
                     try {
                         original.setParameter("baseColorFactor", color[0], color[1], color[2], color[3])
@@ -878,6 +934,35 @@ class FilamentPlatformView(
                 }
             }
         }
+    }
+
+    private fun paintCopy(entity: Int, original: MaterialInstance): MaterialInstance {
+        tinted[entity]?.let { return it }
+        return try {
+            original.material.createInstance().also { tinted[entity] = it }
+        } catch (_: Exception) {
+            original
+        }
+    }
+
+    private fun logUploadHeartbeat(frameTimeNanos: Long) {
+        if (!sceneArmed || reportedReady || destroyed) return
+        if (lastUploadLog != 0L && frameTimeNanos - lastUploadLog < 2_000_000_000L) return
+        lastUploadLog = frameTimeNanos
+        val progress = if (activeStarted) {
+            try {
+                resourceLoader.asyncGetLoadProgress()
+            } catch (_: Exception) {
+                -1f
+            }
+        } else {
+            -1f
+        }
+        Log.i(
+            TAG,
+            "upload loaded=$uploadsDone total=$uploadsTotal progress=$progress " +
+                "queue=${gpuQueue.size + bufferQueue.size}",
+        )
     }
 
     private fun isVisible(id: Long): Boolean {
@@ -1017,6 +1102,34 @@ class FilamentPlatformView(
         activeAsset = null
         activeStarted = false
         gpuQueue.clear()
+        bufferQueue.clear()
+        previewAssets.clear()
+        val rm = engine.renderableManager
+        if (xrayInstance != null) {
+            for ((entity, original) in originals) {
+                val inst = rm.getInstance(entity)
+                if (inst == 0) continue
+                try {
+                    rm.setMaterialInstanceAt(inst, 0, original)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        for ((entity, tint) in tinted) {
+            val inst = rm.getInstance(entity)
+            val original = originals[entity]
+            if (inst != 0 && original != null) {
+                try {
+                    rm.setMaterialInstanceAt(inst, 0, original)
+                } catch (_: Exception) {
+                }
+            }
+            try {
+                engine.destroyMaterialInstance(tint)
+            } catch (_: Exception) {
+            }
+        }
+        tinted.clear()
         for (asset in assets) {
             try {
                 scene.removeEntities(asset.entities)
@@ -1056,21 +1169,37 @@ class FilamentPlatformView(
 
     private fun destroyScene() {
         if (!engineAlive) return
-        try {
-            clearModels()
-            xrayInstance = null
+        fun step(label: String, body: () -> Unit) {
+            try {
+                body()
+            } catch (error: Exception) {
+                Log.w(TAG, "$label: ${error.message}")
+            }
+        }
+        step("clear") { clearModels() }
+        step("xray-instance") {
+            xrayInstance?.let { engine.destroyMaterialInstance(it) }
+        }
+        xrayInstance = null
+        step("xray-material") {
             xrayMaterial?.let { engine.destroyMaterial(it) }
-            xrayMaterial = null
+        }
+        xrayMaterial = null
+        step("lights") {
             scene.indirectLight = null
             scene.skybox = null
             engine.destroyIndirectLight(indirect)
             engine.destroySkybox(skybox)
             engine.destroyEntity(sun)
             engine.destroyEntity(fill)
+        }
+        step("loaders") {
             assetLoader.destroy()
             materialProvider.destroyMaterials()
             materialProvider.destroy()
             resourceLoader.destroy()
+        }
+        step("views") {
             swapChain?.let { engine.destroySwapChain(it) }
             swapChain = null
             engine.destroyRenderer(renderer)
@@ -1080,14 +1209,15 @@ class FilamentPlatformView(
             EntityManager.get().destroy(camera.entity)
             EntityManager.get().destroy(sun)
             EntityManager.get().destroy(fill)
+        }
+        var engineDestroyed = false
+        step("engine") {
             engine.flushAndWait()
             engine.destroy()
-            Log.i(TAG, "destroyed filament engine")
-        } catch (error: Exception) {
-            Log.w(TAG, "destroy failed: ${error.message}")
-        } finally {
-            engineAlive = false
+            engineDestroyed = true
         }
+        if (engineDestroyed) Log.i(TAG, "destroyed filament engine")
+        engineAlive = false
     }
 
     private fun longSet(values: List<*>?): HashSet<Long> {
@@ -1137,6 +1267,7 @@ class FilamentPlatformView(
     companion object {
         private const val TAG = "FbvFilament"
         private val HIGHLIGHT = floatArrayOf(1f, 0.45f, 0.08f, 1f)
+        private val STAND_IN = floatArrayOf(0.95f, 0.45f, 0.12f, 1f)
 
         /** Column-major (x, y, z) -> (x, z, -y). */
         private val Z_TO_Y = floatArrayOf(
@@ -1158,6 +1289,8 @@ class FilamentPlatformView(
 
 private class ElementFile(val file: File, val geoms: List<ElementGeom>)
 
+private class PendingGlb(val buffer: ByteBuffer, val preview: Boolean)
+
 private data class LoadPlan(
     val files: List<File>,
     val geoms: Map<Long, ElementGeom>,
@@ -1168,5 +1301,6 @@ private data class LoadPlan(
     val budget: Long,
     val deferred: Map<Long, File>,
     val proxy: ProxyGlb?,
+    val preview: ProxyGlb?,
     val standIn: Set<Long>,
 )
