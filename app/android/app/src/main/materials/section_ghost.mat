@@ -14,20 +14,12 @@ material {
         { type : float4, name : clipPlane, precision : high },
         { type : float4, name : boxMin, precision : high },
         { type : float4, name : boxMax, precision : high },
-        { type : float, name : roughness }
-    ],
-    variables : [
-        meshPos
+        { type : float, name : roughness },
+        { type : float, name : frontSign }
     ],
     requires : [
         tangents
     ]
-}
-
-vertex {
-    void materialVertex(inout MaterialVertexInputs material) {
-        material.meshPos.xyz = getPosition().xyz;
-    }
 }
 
 fragment {
@@ -47,14 +39,14 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec4 plane = materialParams.clipPlane;
-        vec3 world = getUserWorldPosition();
-        vec3 mesh = variable_meshPos.xyz;
-        vec3 lifted = vec3(mesh.x, mesh.z, -mesh.y);
-        if (sectionOut(world, plane) && sectionOut(lifted, plane)) {
+        if (sectionOut(getUserWorldPosition(), plane)) {
             discard;
         }
         vec3 geometric = getWorldGeometricNormalVector();
         if (!gl_FrontFacing) {
+            geometric = -geometric;
+        }
+        if (materialParams.frontSign < 0.0) {
             geometric = -geometric;
         }
         bool facesCamera = dot(geometric, getWorldViewVector()) > 0.0;

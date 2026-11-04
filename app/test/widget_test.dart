@@ -289,6 +289,7 @@ void main() {
     expect(find.byKey(const ValueKey('section-near')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('section-more')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
     expect(find.byKey(const ValueKey('section-near')), findsOneWidget);
     expect(find.text('Коробка'), findsOneWidget);
     await tester.tap(find.byType(Switch));

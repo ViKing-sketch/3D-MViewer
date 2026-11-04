@@ -8,9 +8,10 @@ import kotlin.math.sqrt
  * Section plane and optional box in Filament Y-up metres.
  *
  * A point is clipped when `dot(point, normal) > distance`. The same test is
- * in `materials/section.mat`. [rejects] is the picking check: it ignores a hit
- * only when the reconstructed point is clearly on the cut side and still near
- * the scene, so a bad unproject does not swallow a real pick.
+ * in `materials/section.mat`, against API metres only. [at] is the plane's
+ * absolute coordinate along the unflipped axis (`dot(normal, point)`), so a
+ * flip does not change it. [rejects] ignores a hit only when the reconstructed
+ * point is clearly on the cut side and still near the scene.
  */
 object SectionClip {
     class Clip(
@@ -27,6 +28,7 @@ object SectionClip {
         val maxZ: Float,
         val reach: Float,
         val metres: Float,
+        val at: Float,
         val cx: Float,
         val cy: Float,
         val cz: Float,
@@ -115,6 +117,7 @@ object SectionClip {
             maxZ = cz + hz * shrink,
             reach = span,
             metres = along,
+            at = n[0] * px + n[1] * py + n[2] * pz,
             cx = cx,
             cy = cy,
             cz = cz,
@@ -123,23 +126,16 @@ object SectionClip {
     }
 
     /**
-     * Shader keep test. [world] is the API Y-up position (`getUserWorldPosition`,
-     * not the camera-shifted `getWorldPosition`). [mesh] is the package-space
-     * vertex. The root turn is `(x, y, z) -> (x, z, -y)`. A fragment is removed
-     * only when both positions are on the cut side.
+     * Shader keep test. [x, y, z] is the API Y-up position
+     * (`getUserWorldPosition`, not the camera-shifted `getWorldPosition`).
+     * Local mesh coordinates are not a second chance: a stand-in cube is
+     * clipped in the same metres as the imported GLB.
      */
-    fun visible(
-        worldX: Float,
-        worldY: Float,
-        worldZ: Float,
-        meshX: Float,
-        meshY: Float,
-        meshZ: Float,
-        clip: Clip,
-    ): Boolean {
-        val worldOut = clipped(worldX, worldY, worldZ, clip)
-        val liftedOut = clipped(meshX, meshZ, -meshY, clip)
-        return !worldOut || !liftedOut
+    fun visible(x: Float, y: Float, z: Float, clip: Clip): Boolean = !clipped(x, y, z, clip)
+
+    /** Pick depth is inverted-DX ndc z: about 1 at the near plane and 0 at infinity. */
+    fun usableDepth(depth: Float): Boolean {
+        return depth.isFinite() && depth >= -0.01f && depth <= 1.01f
     }
 
     /** Exact shader test: clipped when the point is strictly past the plane or outside the box. */
@@ -172,6 +168,7 @@ object SectionClip {
             maxZ = clip.maxZ + eps,
             reach = clip.reach,
             metres = clip.metres,
+            at = clip.at,
             cx = clip.cx,
             cy = clip.cy,
             cz = clip.cz,
@@ -181,9 +178,11 @@ object SectionClip {
     }
 
     /**
-     * Filament pick unproject:
-     * `clip = (frag.xy / viewport, frag.z) * 2 - 1`, then inverse projection and the camera model.
-     * Returns world xyz, or null when the matrix cannot be inverted.
+     * Filament pick unproject. [fragX] and [fragY] are viewport-relative.
+     * [clipZ] is [usableDepth] space: the pick buffer stores shader ndc z,
+     * which `getProjectionMatrix` already maps to 1 at the near plane and 0
+     * at infinity. Do not run that value through `* 2 - 1`.
+     * Returns API world xyz, or null when the matrix cannot be inverted.
      */
     fun unproject(
         projection: DoubleArray,
@@ -192,13 +191,13 @@ object SectionClip {
         height: Int,
         fragX: Float,
         fragY: Float,
-        fragZ: Float,
+        clipZ: Float,
     ): FloatArray? {
         if (width < 1 || height < 1 || projection.size < 16 || model.size < 16) return null
         val inv = invert(projection) ?: return null
         val cx = fragX / width * 2.0 - 1.0
         val cy = fragY / height * 2.0 - 1.0
-        val cz = fragZ * 2.0 - 1.0
+        val cz = clipZ.toDouble()
         val view = mul(inv, doubleArrayOf(cx, cy, cz, 1.0))
         if (abs(view[3]) < 1e-8) return null
         val invW = 1.0 / view[3]

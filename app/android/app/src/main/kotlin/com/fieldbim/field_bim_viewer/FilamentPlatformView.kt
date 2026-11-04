@@ -111,8 +111,12 @@ class FilamentPlatformView(
     private var sectionMaterial: Material? = null
     private var sectionGhostMaterial: Material? = null
     private var sectionBody: MaterialInstance? = null
+    private var sectionBodyInward: MaterialInstance? = null
     private var sectionSelected: MaterialInstance? = null
+    private var sectionSelectedInward: MaterialInstance? = null
     private var sectionGhost: MaterialInstance? = null
+    private var sectionGhostInward: MaterialInstance? = null
+    private var sectionStandIn: MaterialInstance? = null
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
     private var gesture: GestureDetector? = null
@@ -151,6 +155,8 @@ class FilamentPlatformView(
     private var sectionActive = false
     private var liveClip: SectionClip.Clip? = null
     private var sentClip: SectionClip.Clip? = null
+    private var publishedAt = Float.NaN
+    private var publishedHalf = Float.NaN
     private var viewportW = 1
     private var viewportH = 1
     private var fitBottomInset = 0.0
@@ -186,6 +192,7 @@ class FilamentPlatformView(
     private val deferred = HashMap<Long, File>()
     private val retainedBuffers = ArrayList<ByteBuffer>()
     private val standInIds = HashSet<Long>()
+    private val inwardIds = HashSet<Long>()
     private var uploadsDone = 0
     private var uploadsTotal = 0
     private var lastUploadLog = 0L
@@ -411,12 +418,26 @@ class FilamentPlatformView(
     }
 
     private fun load(root: String) {
-        if (destroyed || loadingRoot == root) return
+        if (destroyed) return
+        if (loadingRoot == root) {
+            val ticket = generation.get()
+            renderHandler.post {
+                if (destroyed || loadingRoot != root || ticket != generation.get()) return@post
+                val reload = reportedReady
+                resetViewerState()
+                if (reload) {
+                    frame(allBox(), preset)
+                    applyVisibility()
+                }
+            }
+            return
+        }
         loadingRoot = root
         val ticket = generation.incrementAndGet()
         setStatus(mapOf("code" to "loading", "loaded" to 0, "total" to 0))
         renderHandler.post {
             if (ticket != generation.get() || destroyed) return@post
+            resetViewerState()
             sceneArmed = false
             reportedReady = false
             clearModels()
@@ -526,6 +547,9 @@ class FilamentPlatformView(
         }
         live()
         val standIn = proxyIds.toSet()
+        val inward = LinkedHashSet<Long>()
+        if (lod0.isFile) noteWinding(lod0, inward)
+        for (file in elementGlbs) noteWinding(file, inward)
         val span = SceneBounds.span(SceneBounds.union(geomsZ.values, standIn))
         // Records keep the full element bounds so a selected stand-in is framed
         // to the mesh, not to the clamped orange box.
@@ -550,7 +574,7 @@ class FilamentPlatformView(
         Log.i(
             TAG,
             "plan lod0=$useLod0 files=${gpu.size} standIns=${standIn.size} " +
-                "fitSpan=$span preview=${previewGeoms.size}",
+                "inward=${inward.size} fitSpan=$span preview=${previewGeoms.size}",
         )
         return LoadPlan(
             gpu,
@@ -564,7 +588,42 @@ class FilamentPlatformView(
             proxy,
             preview,
             standIn,
+            inward,
         )
+    }
+
+    /** Element files overwrite lod0, matching [readGeoms]. Failures stay outward. */
+    private fun noteWinding(file: File, inward: MutableSet<Long>) {
+        try {
+            for ((id, sign) in GlbElements.frontSigns(file)) {
+                if (sign < 0f) inward.add(id) else inward.remove(id)
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "winding ${file.name}: ${error.message}")
+        }
+    }
+
+    private fun resetViewerState() {
+        val wasSection = sectionEnabled || sectionActive
+        sectionEnabled = false
+        sectionNearAmount = 0.0
+        sectionAxis = "x"
+        sectionFlip = false
+        sectionOffset = 0f
+        sectionBox = false
+        sectionInset = 0f
+        sectionActive = false
+        liveClip = null
+        sentClip = null
+        publishedAt = Float.NaN
+        publishedHalf = Float.NaN
+        preset = "iso"
+        selected = 0L
+        hidden = HashSet()
+        isolated = HashSet()
+        xray = false
+        manipulator = null
+        if (wasSection) Log.i(TAG, "section enabled=false")
     }
 
     private fun readGeoms(file: File): List<ElementGeom> {
@@ -580,6 +639,7 @@ class FilamentPlatformView(
         clearModels()
         records.putAll(plan.geoms)
         standInIds.addAll(plan.standIn)
+        inwardIds.addAll(plan.inward)
         sawLod0 = plan.lod0
         elementFileCount = plan.elementFiles
         partialScene = plan.partial
@@ -1100,11 +1160,15 @@ class FilamentPlatformView(
             if (instance == 0 || !show) continue
             val original = originals.getOrPut(entity) { rm.getMaterialInstanceAt(instance, 0) }
             if (sectionActive && sectionBody != null) {
+                val proxy = entity in proxyEntities
+                val inward = !proxy && id in inwardIds
                 val painted = when {
-                    id == selected -> sectionSelected ?: sectionBody!!
-                    xray && sectionGhost != null -> sectionGhost!!
-                    else -> sectionBody!!
-                }
+                    id == selected -> if (inward) sectionSelectedInward else sectionSelected
+                    xray -> if (inward) sectionGhostInward else sectionGhost
+                    proxy -> sectionStandIn
+                    inward -> sectionBodyInward
+                    else -> sectionBody
+                } ?: sectionBody!!
                 rm.setMaterialInstanceAt(instance, 0, painted)
                 continue
             }
@@ -1403,20 +1467,33 @@ class FilamentPlatformView(
         val bounds = if (clip != null) sectionBounds() else null
         val projection = if (clip != null) camera.getProjectionMatrix(DoubleArray(16)) else null
         val model = if (clip != null) camera.getModelMatrix(DoubleArray(16)) else null
+        val vpLeft = vp.left
+        val vpBottom = vp.bottom
         view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
             var id = elementByEntity[result.renderable] ?: 0L
-            if (id != 0L && clip != null && bounds != null && projection != null && model != null) {
-                val frag = result.fragCoords
-                val world = if (frag.size >= 3) {
-                    SectionClip.unproject(projection, model, width, height, frag[0], frag[1], frag[2])
-                } else {
-                    null
-                }
+            val depth = result.depth
+            val frag = result.fragCoords
+            val fragX = if (frag.size >= 1) frag[0] - vpLeft else x
+            val fragY = if (frag.size >= 2) frag[1] - vpBottom else height - y
+            var world: FloatArray? = null
+            var rejected = false
+            if (id != 0L && clip != null && bounds != null && projection != null && model != null &&
+                SectionClip.usableDepth(depth)
+            ) {
+                world = SectionClip.unproject(projection, model, width, height, fragX, fragY, depth)
                 if (world != null && SectionClip.rejects(world[0], world[1], world[2], clip, bounds)) {
+                    rejected = true
                     id = 0L
                 }
             }
+            val worldText = world?.joinToString(",") ?: "none"
+            val fragText = if (frag.isEmpty()) "none" else frag.joinToString(",")
+            Log.i(
+                TAG,
+                "pick entity=${result.renderable} id=$id depth=$depth frag=$fragText " +
+                    "adj=$fragX,$fragY world=$worldText reject=$rejected",
+            )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)
                 if (sceneArmed) pumpQueue()
@@ -1452,10 +1529,26 @@ class FilamentPlatformView(
         sectionGhostMaterial = openMaterial("materials/section_ghost.filamat")
         val material = sectionMaterial
         if (material == null) return
-        sectionBody = material.createInstance().also { paintSection(it, selected = false, ghost = false) }
-        sectionSelected = material.createInstance().also { paintSection(it, selected = true, ghost = false) }
+        sectionBody = material.createInstance().also {
+            paintSection(it, SECTION_BODY, 0.78f, 1f)
+        }
+        sectionBodyInward = material.createInstance().also {
+            paintSection(it, SECTION_BODY, 0.78f, -1f)
+        }
+        sectionSelected = material.createInstance().also {
+            paintSection(it, HIGHLIGHT, 0.42f, 1f)
+        }
+        sectionSelectedInward = material.createInstance().also {
+            paintSection(it, HIGHLIGHT, 0.42f, -1f)
+        }
+        sectionStandIn = material.createInstance().also {
+            paintSection(it, STAND_IN, 0.5f, 1f)
+        }
         sectionGhost = sectionGhostMaterial?.createInstance()?.also {
-            paintSection(it, selected = false, ghost = true)
+            paintSection(it, SECTION_GHOST, 0.9f, 1f)
+        }
+        sectionGhostInward = sectionGhostMaterial?.createInstance()?.also {
+            paintSection(it, SECTION_GHOST, 0.9f, -1f)
         }
     }
 
@@ -1472,23 +1565,24 @@ class FilamentPlatformView(
         }
     }
 
-    private fun paintSection(instance: MaterialInstance, selected: Boolean, ghost: Boolean) {
-        val color = when {
-            ghost -> SECTION_GHOST
-            selected -> HIGHLIGHT
-            else -> SECTION_BODY
-        }
-        val roughness = when {
-            ghost -> 0.9f
-            selected -> 0.42f
-            else -> 0.78f
-        }
+    private fun paintSection(instance: MaterialInstance, color: FloatArray, roughness: Float, frontSign: Float) {
         instance.setParameter("baseColor", color[0], color[1], color[2], color[3])
         instance.setParameter("capColor", SECTION_CAP[0], SECTION_CAP[1], SECTION_CAP[2], SECTION_CAP[3])
         instance.setParameter("roughness", roughness)
+        instance.setParameter("frontSign", frontSign)
         instance.setParameter("clipPlane", 0f, 0f, 0f, 0f)
         instance.setParameter("boxMin", 0f, 0f, 0f, 0f)
         instance.setParameter("boxMax", 0f, 0f, 0f, 0f)
+    }
+
+    private fun eachSection(block: (MaterialInstance) -> Unit) {
+        sectionBody?.let(block)
+        sectionBodyInward?.let(block)
+        sectionSelected?.let(block)
+        sectionSelectedInward?.let(block)
+        sectionGhost?.let(block)
+        sectionGhostInward?.let(block)
+        sectionStandIn?.let(block)
     }
 
     private fun syncSection(log: Boolean) {
@@ -1508,7 +1602,7 @@ class FilamentPlatformView(
     }
 
     private fun updateSectionUniforms() {
-        val body = sectionBody ?: return
+        if (sectionBody == null) return
         val bounds = sectionBounds()
         val clip = SectionClip.solve(
             axis = sectionAxis,
@@ -1526,11 +1620,11 @@ class FilamentPlatformView(
         )
         liveClip = clip
         val previous = sentClip
-        if (previous != null && previous.matches(clip)) return
-        sentClip = clip
-        pushClip(body, clip)
-        sectionSelected?.let { pushClip(it, clip) }
-        sectionGhost?.let { pushClip(it, clip) }
+        if (previous == null || !previous.matches(clip)) {
+            sentClip = clip
+            eachSection { pushClip(it, clip) }
+        }
+        publishSection(clip.reach, clip.boxSpan, clip.at, force = false)
     }
 
     private fun pushClip(instance: MaterialInstance, clip: SectionClip.Clip) {
@@ -1573,28 +1667,40 @@ class FilamentPlatformView(
         val clip = liveClip
         if (!sectionEnabled || clip == null) {
             Log.i(TAG, "section enabled=false")
-            publishSection(0f, 0f)
+            publishSection(0f, 0f, 0f, force = true)
             return
         }
         Log.i(
             TAG,
             "section enabled=true axis=$sectionAxis flip=$sectionFlip " +
-                "offset=$sectionOffset metres=${clip.metres} near=$sectionNearAmount " +
+                "offset=$sectionOffset metres=${clip.metres} at=${clip.at} near=$sectionNearAmount " +
                 "box=$sectionBox inset=$sectionInset " +
                 "plane=${clip.nx},${clip.ny},${clip.nz},${clip.d} " +
                 "centre=${clip.cx},${clip.cy},${clip.cz} " +
                 "boxMin=${clip.minX},${clip.minY},${clip.minZ} " +
                 "boxMax=${clip.maxX},${clip.maxY},${clip.maxZ}",
         )
-        publishSection(clip.reach, clip.boxSpan)
+        publishSection(clip.reach, clip.boxSpan, clip.at, force = true)
     }
 
-    private fun publishSection(half: Float, box: Float) {
+    private fun publishSection(half: Float, box: Float, at: Float, force: Boolean) {
+        if (!force && !publishedAt.isNaN() &&
+            kotlin.math.abs(publishedAt - at) < 0.05f &&
+            kotlin.math.abs(publishedHalf - half) < 0.05f
+        ) {
+            return
+        }
+        publishedAt = at
+        publishedHalf = half
         mainHandler.post {
             try {
                 channel.invokeMethod(
                     "onSection",
-                    mapOf("half" to half.toDouble(), "box" to box.toDouble()),
+                    mapOf(
+                        "half" to half.toDouble(),
+                        "box" to box.toDouble(),
+                        "at" to at.toDouble(),
+                    ),
                 )
             } catch (_: Exception) {
             }
@@ -1682,6 +1788,7 @@ class FilamentPlatformView(
         records.clear()
         deferred.clear()
         standInIds.clear()
+        inwardIds.clear()
         replaced.clear()
         framedBox = null
         framedAspect = 0.0
@@ -1714,13 +1821,15 @@ class FilamentPlatformView(
         }
         xrayMaterial = null
         step("section-instances") {
-            sectionBody?.let { engine.destroyMaterialInstance(it) }
-            sectionSelected?.let { engine.destroyMaterialInstance(it) }
-            sectionGhost?.let { engine.destroyMaterialInstance(it) }
+            eachSection { engine.destroyMaterialInstance(it) }
         }
         sectionBody = null
+        sectionBodyInward = null
         sectionSelected = null
+        sectionSelectedInward = null
         sectionGhost = null
+        sectionGhostInward = null
+        sectionStandIn = null
         step("section-material") {
             sectionMaterial?.let { engine.destroyMaterial(it) }
             sectionGhostMaterial?.let { engine.destroyMaterial(it) }
@@ -1856,4 +1965,5 @@ private data class LoadPlan(
     val proxy: ProxyGlb?,
     val preview: ProxyGlb?,
     val standIn: Set<Long>,
+    val inward: Set<Long>,
 )

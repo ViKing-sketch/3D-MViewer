@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -34,9 +35,8 @@ class _ModelPageState extends State<ModelPage>
   final Set<int> _isolated = {};
   bool _xray = false;
   SectionView _section = const SectionView();
-  bool _sectionMore = false;
-  double? _sectionHalf;
   double? _sectionBoxSpan;
+  double? _sectionAt;
   int _renderRevision = 0;
   bool _opening = false;
   bool _closing = false;
@@ -761,33 +761,32 @@ class _ModelPageState extends State<ModelPage>
 
   Widget _sectionFrame(Widget viewport) {
     if (!_section.enabled) return viewport;
-    final size = MediaQuery.sizeOf(context);
-    final portrait = size.height > size.width && size.width < 1100;
-    return Stack(
-      children: [
-        Positioned.fill(child: viewport),
-        Positioned(
-          left: 8,
-          right: 8,
-          top: portrait ? 8 : null,
-          bottom: portrait ? null : 8,
-          child: _sectionPanel(widget.strings),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final portrait = constraints.maxHeight > constraints.maxWidth &&
+            constraints.maxWidth < 1100;
+        final lift = portrait ? _fitBottomInset * constraints.maxHeight : 0.0;
+        return Stack(
+          children: [
+            Positioned.fill(child: viewport),
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 8 + lift,
+              child: _sectionPanel(widget.strings),
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _sectionPanel(S strings) {
     final scheme = Theme.of(context).colorScheme;
-    final half = _sectionHalf;
-    final offsetLabel = half == null
+    final at = _sectionAt;
+    final offsetLabel = at == null
         ? strings.sectionOffset
-        : strings.sectionOffsetMetres(_section.offset * half);
-    final boxSpan = _sectionBoxSpan;
-    final keep = (1 - _section.inset).clamp(0.02, 1).toDouble();
-    final boxLabel = boxSpan == null
-        ? strings.sectionInset
-        : strings.sectionBoxMetres(keep * boxSpan);
+        : strings.sectionOffsetAt(_axisLabel(strings, _section.axis), at);
     return Material(
       elevation: 3,
       borderRadius: BorderRadius.circular(12),
@@ -826,6 +825,16 @@ class _ModelPageState extends State<ModelPage>
                   onPressed: () => _setSection(_section.copyWith(flip: !_section.flip)),
                   icon: const Icon(Icons.swap_horiz),
                 ),
+                Builder(
+                  builder: (buttonContext) {
+                    return TextButton(
+                      key: const ValueKey('section-more'),
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                      onPressed: () => _showSectionMore(buttonContext),
+                      child: Text(strings.sectionMore),
+                    );
+                  },
+                ),
               ],
             ),
             _sectionSlider(
@@ -836,46 +845,101 @@ class _ModelPageState extends State<ModelPage>
               const ValueKey('section-offset'),
               (value) => _setSection(_section.copyWith(offset: value)),
             ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                key: const ValueKey('section-more'),
-                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                onPressed: () => setState(() => _sectionMore = !_sectionMore),
-                child: Text(_sectionMore ? strings.sectionLess : strings.sectionMore),
-              ),
-            ),
-            if (_sectionMore) ...[
-              _sectionSlider(
-                strings.sectionNear,
-                _section.near,
-                0,
-                1,
-                const ValueKey('section-near'),
-                (value) => _setSection(_section.copyWith(near: value)),
-              ),
-              Row(
-                children: [
-                  Text(strings.sectionBox),
-                  const Spacer(),
-                  Switch(
-                    value: _section.box,
-                    onChanged: (value) => _setSection(
-                      _section.copyWith(box: value, inset: value ? _section.inset : 0),
-                    ),
-                  ),
-                ],
-              ),
-              if (_section.box)
-                _sectionSlider(
-                  boxLabel,
-                  keep,
-                  0.02,
-                  1,
-                  const ValueKey('section-inset'),
-                  (value) => _setSection(_section.copyWith(inset: 1 - value)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSectionMore(BuildContext buttonContext) async {
+    final strings = widget.strings;
+    final button = buttonContext.findRenderObject() as RenderBox?;
+    if (button == null || !button.attached || !mounted) return;
+    final origin = button.localToGlobal(Offset.zero);
+    final screen = MediaQuery.sizeOf(context);
+    final width = math.min(320.0, screen.width - 16);
+    final left = origin.dx.clamp(8.0, math.max(8.0, screen.width - width - 8)).toDouble();
+    final bottom = math.max(8.0, screen.height - origin.dy + 8);
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: strings.sectionMore,
+      barrierColor: const Color(0x33000000),
+      transitionDuration: const Duration(milliseconds: 1),
+      pageBuilder: (dialogContext, _, _) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return Stack(
+              children: [
+                Positioned(
+                  left: left,
+                  width: width,
+                  bottom: bottom,
+                  child: _sectionMoreCard(strings, setLocal),
                 ),
-            ],
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _sectionMoreCard(S strings, void Function(VoidCallback) setLocal) {
+    final scheme = Theme.of(context).colorScheme;
+    final boxSpan = _sectionBoxSpan;
+    final keep = (1 - _section.inset).clamp(0.02, 1).toDouble();
+    final boxLabel = boxSpan == null
+        ? strings.sectionInset
+        : strings.sectionBoxMetres(keep * boxSpan);
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _sectionSlider(
+              strings.sectionNear,
+              _section.near,
+              0,
+              1,
+              const ValueKey('section-near'),
+              (value) {
+                _setSection(_section.copyWith(near: value));
+                setLocal(() {});
+              },
+            ),
+            Row(
+              children: [
+                Text(strings.sectionBox),
+                const Spacer(),
+                Switch(
+                  value: _section.box,
+                  onChanged: (value) {
+                    _setSection(
+                      _section.copyWith(box: value, inset: value ? _section.inset : 0),
+                    );
+                    setLocal(() {});
+                  },
+                ),
+              ],
+            ),
+            if (_section.box)
+              _sectionSlider(
+                boxLabel,
+                keep,
+                0.02,
+                1,
+                const ValueKey('section-inset'),
+                (value) {
+                  _setSection(_section.copyWith(inset: 1 - value));
+                  setLocal(() {});
+                },
+              ),
           ],
         ),
       ),
@@ -941,11 +1005,11 @@ class _ModelPageState extends State<ModelPage>
       bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
-      onSectionSpan: (half, box) {
+      onSectionSpan: (_, box, at) {
         if (!mounted) return;
         setState(() {
-          _sectionHalf = half;
           _sectionBoxSpan = box;
+          _sectionAt = at;
         });
       },
     );

@@ -4,11 +4,10 @@
 //
 // Keep a fragment when dot(point, clipPlane.xyz) <= clipPlane.w.
 // boxMin.w > 0.5 also discards outside (boxMin.xyz, boxMax.xyz).
-// The plane is in API metres (Y-up). Filament's getWorldPosition() is shifted
-// by the camera, so the test uses getUserWorldPosition(). A fragment is
-// dropped only when that point and the package position lifted to Y-up both
-// fail, which is SectionClip.visible. Camera-facing fragments stay lit.
-// The other side is a solid cap.
+// The plane is in API metres (Y-up). Filament shifts getWorldPosition() to the
+// camera, so the test uses getUserWorldPosition() only. frontSign is +1 for
+// outward winding and -1 for inward winding. The exterior stays lit. The cut
+// is a solid cap.
 material {
     name : SectionClip,
     shadingModel : lit,
@@ -21,20 +20,12 @@ material {
         { type : float4, name : clipPlane, precision : high },
         { type : float4, name : boxMin, precision : high },
         { type : float4, name : boxMax, precision : high },
-        { type : float, name : roughness }
-    ],
-    variables : [
-        meshPos
+        { type : float, name : roughness },
+        { type : float, name : frontSign }
     ],
     requires : [
         tangents
     ]
-}
-
-vertex {
-    void materialVertex(inout MaterialVertexInputs material) {
-        material.meshPos.xyz = getPosition().xyz;
-    }
 }
 
 fragment {
@@ -54,16 +45,17 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec4 plane = materialParams.clipPlane;
-        vec3 world = getUserWorldPosition();
-        vec3 mesh = variable_meshPos.xyz;
-        vec3 lifted = vec3(mesh.x, mesh.z, -mesh.y);
-        bool worldOut = sectionOut(world, plane);
-        bool liftedOut = sectionOut(lifted, plane);
-        if (worldOut && liftedOut) {
+        if (sectionOut(getUserWorldPosition(), plane)) {
             discard;
         }
+        // Filament flips the geometric normal toward the camera on a back
+        // face. Undo that, then undo an inward mesh, so the exterior is the
+        // side that faces the eye.
         vec3 geometric = getWorldGeometricNormalVector();
         if (!gl_FrontFacing) {
+            geometric = -geometric;
+        }
+        if (materialParams.frontSign < 0.0) {
             geometric = -geometric;
         }
         bool facesCamera = dot(geometric, getWorldViewVector()) > 0.0;

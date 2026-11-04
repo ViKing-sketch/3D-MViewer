@@ -52,7 +52,7 @@ class FilamentViewport extends StatefulWidget {
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
   final ValueChanged<Set<int>>? onStandIns;
-  final void Function(double half, double box)? onSectionSpan;
+  final void Function(double half, double box, double at)? onSectionSpan;
 
   @override
   State<FilamentViewport> createState() => FilamentViewportState();
@@ -113,7 +113,12 @@ class FilamentViewportState extends State<FilamentViewport> {
           final half = args['half'];
           final box = args['box'];
           if (half is num && box is num) {
-            widget.onSectionSpan?.call(half.toDouble(), box.toDouble());
+            final at = args['at'];
+            widget.onSectionSpan?.call(
+              half.toDouble(),
+              box.toDouble(),
+              at is num ? at.toDouble() : 0,
+            );
           }
         }
       }

@@ -69,9 +69,9 @@ class S {
       : 'An X, Y (up), Z, or view plane clips in the material and stays put when you zoom. Front faces stay lit, and the cut is the back-face colour. X-ray and the selection highlight keep working. Taps ignore clipped geometry.';
   String get sectionNear => russian ? 'Ближняя' : 'Near';
   String get sectionOffset => russian ? 'Сдвиг' : 'Offset';
-  String sectionOffsetMetres(double metres) => russian
-      ? 'Сдвиг · ${metres.toStringAsFixed(1)} м'
-      : 'Offset · ${metres.toStringAsFixed(1)} m';
+  String sectionOffsetAt(String axis, double metres) => russian
+      ? '$axis · ${metres.toStringAsFixed(1)} м'
+      : '$axis · ${metres.toStringAsFixed(1)} m';
   String sectionBoxMetres(double metres) => russian
       ? 'Коробка · ${metres.toStringAsFixed(1)} м'
       : 'Box · ${metres.toStringAsFixed(1)} m';

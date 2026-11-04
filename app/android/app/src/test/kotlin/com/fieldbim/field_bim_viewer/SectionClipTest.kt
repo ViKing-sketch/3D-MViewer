@@ -66,15 +66,17 @@ class SectionClipTest {
         )
         assertEquals(1f, kept.nx, 1e-4f)
         assertEquals(at, kept.d, 0.02f)
+        assertEquals(at, kept.at, 0.02f)
         assertEquals(-1f, flipped.nx, 1e-4f)
         assertEquals(-at, flipped.d, 0.02f)
+        assertEquals(at, flipped.at, 0.02f)
         assertEquals(kept.metres, flipped.metres, 0.02f)
         assertFalse(SectionClip.clipped(10f, 2f, 0f, kept))
         assertTrue(SectionClip.clipped(10f, 2f, 0f, flipped))
     }
 
     @Test
-    fun packageSpacePositionSurvivesAWorldPlaneThatMissesIt() {
+    fun apiMetresAreTheOnlyClipSpace() {
         val clip = SectionClip.solve(
             axis = "y",
             flip = false,
@@ -90,17 +92,14 @@ class SectionClipTest {
             boxInset = 0f,
         )
         assertEquals(8f, clip.d, 1e-3f)
+        assertEquals(8f, clip.at, 1e-3f)
         assertTrue(SectionClip.clipped(29f, 80f, 8f, clip))
-        assertTrue(SectionClip.visible(29f, 80f, 8f, 29f, 80f, 8f, clip))
-        assertFalse(SectionClip.visible(29f, 40f, -20f, 29f, -20f, 40f, clip))
-    }
-
-    @Test
-    fun packageSpaceBoxKeepsAPointWhoseWorldYIsOutside() {
-        val clip = solve(axis = "x", flip = false, offset = 1f, box = true, inset = 0f)
-        assertTrue(SectionClip.clipped(5f, 80f, 1f, clip))
-        assertTrue(SectionClip.visible(5f, 80f, 1f, 5f, -1f, 2f, clip))
-        assertFalse(SectionClip.visible(5f, 80f, 1f, 5f, -80f, 80f, clip))
+        assertFalse(SectionClip.visible(29f, 80f, 8f, clip))
+        assertTrue(SectionClip.visible(29f, 4f, -20f, clip))
+        val boxed = solve(axis = "x", flip = false, offset = 1f, box = true, inset = 0f)
+        assertTrue(SectionClip.clipped(5f, 80f, 1f, boxed))
+        assertFalse(SectionClip.visible(5f, 80f, 1f, boxed))
+        assertTrue(SectionClip.visible(5f, 2f, 1f, boxed))
     }
 
     @Test
@@ -193,22 +192,32 @@ class SectionClipTest {
     @Test
     fun unprojectAppliesTheCameraModel() {
         val identity = DoubleArray(16) { if (it % 5 == 0) 1.0 else 0.0 }
-        val origin = SectionClip.unproject(identity, identity, 100, 50, 50f, 25f, 0.5f)
+        // Depth 0 is ndc z 0. Mapping it with fragZ * 2 - 1 would yield -1.
+        val origin = SectionClip.unproject(identity, identity, 100, 50, 50f, 25f, 0f)
         assertEquals(0f, origin!![0], 1e-4f)
         assertEquals(0f, origin[1], 1e-4f)
         assertEquals(0f, origin[2], 1e-4f)
+        val mid = SectionClip.unproject(identity, identity, 100, 50, 0f, 0f, 0.5f)
+        assertEquals(-1f, mid!![0], 1e-4f)
+        assertEquals(-1f, mid[1], 1e-4f)
+        assertEquals(0.5f, mid[2], 1e-4f)
         val moved = doubleArrayOf(
             1.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, 1.0, 0.0,
             3.0, 4.0, 5.0, 1.0,
         )
-        val world = SectionClip.unproject(identity, moved, 100, 50, 50f, 25f, 0.5f)
+        val world = SectionClip.unproject(identity, moved, 100, 50, 50f, 25f, 0f)
         assertEquals(3f, world!![0], 1e-4f)
         assertEquals(4f, world[1], 1e-4f)
         assertEquals(5f, world[2], 1e-4f)
         assertNull(SectionClip.unproject(identity, identity, 0, 10, 0f, 0f, 0f))
         assertNull(SectionClip.invert(DoubleArray(16)))
+        assertTrue(SectionClip.usableDepth(0f))
+        assertTrue(SectionClip.usableDepth(1f))
+        assertFalse(SectionClip.usableDepth(Float.NaN))
+        assertFalse(SectionClip.usableDepth(-0.2f))
+        assertFalse(SectionClip.usableDepth(1.2f))
     }
 
     private fun solve(
