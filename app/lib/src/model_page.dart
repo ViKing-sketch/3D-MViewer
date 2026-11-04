@@ -49,6 +49,7 @@ class _ModelPageState extends State<ModelPage>
   final _renderBarKey = GlobalKey();
   final _sheet = DraggableScrollableController();
   double _fitBottomInset = 0;
+  int _insetTries = 0;
   late final TabController _tabs;
 
   @override
@@ -208,7 +209,15 @@ class _ModelPageState extends State<ModelPage>
   void _syncFitInset() {
     final stack = _portraitKey.currentContext?.size?.height;
     final bar = _renderBarKey.currentContext?.size?.height ?? 0;
-    if (stack == null || stack <= bar + 1) return;
+    if (stack == null || stack <= bar + 1) {
+      // The sheet is not laid out yet. Try the next frames, then stop.
+      if (_portraitKey.currentContext != null && _insetTries < 8) {
+        _insetTries++;
+        _scheduleFitInset(null);
+      }
+      return;
+    }
+    _insetTries = 0;
     final sheet = _sheet.isAttached ? _sheet.size : 0.22;
     final overlap = (sheet * stack).clamp(0.0, stack - bar);
     _pushFitInset(overlap / (stack - bar));
@@ -217,8 +226,7 @@ class _ModelPageState extends State<ModelPage>
   void _pushFitInset(double inset) {
     final next = inset.clamp(0.0, 0.72);
     if ((next - _fitBottomInset).abs() < 0.015) return;
-    _fitBottomInset = next;
-    _viewport.currentState?.setFitInset(next);
+    setState(() => _fitBottomInset = next);
   }
 
   bool _sameIds(Set<int> a, Set<int> b) {
@@ -713,6 +721,7 @@ class _ModelPageState extends State<ModelPage>
       xray: _xray,
       renderRevision: _renderRevision,
       frameToken: _frameToken,
+      bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
     );

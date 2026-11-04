@@ -27,6 +27,7 @@ class FilamentViewport extends StatefulWidget {
     this.xray = false,
     this.renderRevision = 0,
     this.frameToken = 0,
+    this.bottomInset = 0,
     this.onPick,
     this.onStatus,
     this.onStandIns,
@@ -42,6 +43,9 @@ class FilamentViewport extends StatefulWidget {
   final bool xray;
   final int renderRevision;
   final int frameToken;
+
+  /// Fraction of this view covered from the bottom, measured from the sheet.
+  final double bottomInset;
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
   final ValueChanged<Set<int>>? onStandIns;
@@ -77,6 +81,9 @@ class FilamentViewportState extends State<FilamentViewport> {
         oldWidget.frameToken != widget.frameToken) {
       _pushState();
     }
+    if ((oldWidget.bottomInset - widget.bottomInset).abs() > 0.001) {
+      _commands?.setFitInset(widget.bottomInset);
+    }
     if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
       _commands?.load(widget.rootPath!);
     }
@@ -100,6 +107,10 @@ class FilamentViewportState extends State<FilamentViewport> {
     });
     final existing = await commands.sync();
     if (existing != null && mounted) _applyStatus(existing);
+    // The sheet height is known before the mesh plan finishes. Send it before
+    // load so the first frame is not inset=0, and again from didUpdateWidget
+    // if layout measures a different collapsed height.
+    await commands.setFitInset(widget.bottomInset);
     if (widget.rootPath != null) await commands.load(widget.rootPath!);
     await _pushState();
   }
