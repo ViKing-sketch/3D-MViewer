@@ -1334,14 +1334,35 @@ class FilamentPlatformView(
 
     private fun pick(x: Float, y: Float) {
         val vp = view.viewport
-        val width = if (vp.width > 1) vp.width else viewportW
-        val height = if (vp.height > 1) vp.height else viewportH
-        if (width <= 1 || height <= 1) return
-        val px = (vp.left + x.toInt()).coerceIn(vp.left, vp.left + width - 1)
-        val py = (vp.bottom + height - y.toInt()).coerceIn(vp.bottom, vp.bottom + height - 1)
+        val ready = vp.width > 1 && vp.height > 1
+        val left = if (ready) vp.left else 0
+        val bottom = if (ready) vp.bottom else 0
+        val width = if (ready) vp.width else viewportW
+        val height = if (ready) vp.height else viewportH
+        val coords = PickCoords.resolve(left, bottom, width, height, viewportH, x, y)
+        if (coords == null) {
+            val reason = if (width <= 1 || height <= 1) "unready" else "outside"
+            Log.i(
+                TAG,
+                "pick miss reason=$reason x=$x y=$y viewport=$left,$bottom ${width}x$height",
+            )
+            return
+        }
+        val px = coords[0]
+        val py = coords[1]
         view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
             val id = elementByEntity[result.renderable] ?: 0L
+            val reason = when {
+                id != 0L -> "hit"
+                result.renderable != 0 -> "unmapped"
+                else -> "miss"
+            }
+            Log.i(
+                TAG,
+                "pick $reason element=$id renderable=${result.renderable} " +
+                    "depth=${result.depth} px=$px py=$py",
+            )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)
                 if (sceneArmed) pumpQueue()
