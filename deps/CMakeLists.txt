@@ -239,7 +239,7 @@ if(NOT FBV_IOS_ALREADY EQUAL 0)
     message(FATAL_ERROR
       "Failed to patch IfcOpenShell at ${ifcopenshell_SOURCE_DIR} (exit ${FBV_IOS_APPLY}): ${FBV_IOS_APPLY_ERR}")
   endif()
-  message(STATUS "Patched IfcOpenShell for MSVC 19.50 profile init and bounded OCCT shape memory")
+  message(STATUS "Patched IfcOpenShell for MSVC profile init and bounded OCCT shape memory")
 else()
   message(STATUS "IfcOpenShell patch already applied in ${ifcopenshell_SOURCE_DIR}")
 endif()

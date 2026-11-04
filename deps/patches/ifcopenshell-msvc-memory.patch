@@ -1,18 +1,37 @@
 diff --git a/src/ifcgeom/profile_helper.h b/src/ifcgeom/profile_helper.h
 --- a/src/ifcgeom/profile_helper.h
 +++ b/src/ifcgeom/profile_helper.h
-@@ -11,6 +11,11 @@
- 			boost::optional<double> radius;
+@@ -2,6 +2,8 @@
+ #define PROFILE_HELPER_H
  
+ #include "taxonomy.h"
++#include <initializer_list>
++#include <type_traits>
+ 
+ namespace ifcopenshell {
+ 
+@@ -13,6 +15,21 @@
  			profile_point(const std::array<double, 2>& p, const boost::optional<double>& r = boost::none)
-+				: xy(p), radius(r) {
-+			}
-+
-+			// fbv: MSVC 19.50 + Boost 1.92 rejects {pt,{r}} list-init of boost::optional.
-+			profile_point(const std::array<double, 2>& p, double r)
  				: xy(p), radius(r) {
  			}
++
++			// fbv: Boost 1.92 made optional's converting constructor explicit, so
++			// {{x, y}, {radius}} is not copy-list-initialized. MSVC 19.44 does not
++			// treat {radius} as a double either. initializer_list matches the braced
++			// radius. An unbraced radius uses the arithmetic overload, which is not
++			// viable for a braced list (template arguments are not deduced from it).
++			template <typename T>
++			profile_point(const std::array<double, 2>& p, T r,
++				typename std::enable_if<std::is_arithmetic<typename std::decay<T>::type>::value, int>::type = 0)
++				: xy(p), radius(static_cast<double>(r)) {
++			}
++
++			profile_point(const std::array<double, 2>& p, std::initializer_list<double> r)
++				: xy(p), radius(r.size() ? boost::optional<double>(*r.begin()) : boost::none) {
++			}
  		};
+ 
+ 		struct profile_point_with_edges {
 diff --git a/src/ifcgeom/Iterator.cpp b/src/ifcgeom/Iterator.cpp
 --- a/src/ifcgeom/Iterator.cpp
 +++ b/src/ifcgeom/Iterator.cpp
