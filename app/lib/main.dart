@@ -1,13 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import 'src/appearance.dart';
 import 'src/library_page.dart';
 import 'src/model_page.dart';
+import 'src/package_import.dart';
 import 'src/sqlite_setup.dart';
 import 'src/strings.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  configureSqlite();
+  await prepareSqlite();
   runApp(const FieldBimApp());
 }
 
@@ -30,42 +34,63 @@ class FieldBimApp extends StatefulWidget {
 class _FieldBimAppState extends State<FieldBimApp> {
   late bool _russian = widget.russian;
   ThemeMode _mode = ThemeMode.light;
+  final _navigator = GlobalKey<NavigatorState>();
+  final _library = GlobalKey<LibraryPageState>();
+
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isAndroid && widget.autoOpenPath == null) {
+      PackageImport.bind(onOpened: _openImported, onFailed: _showImportError);
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        final pending = await PackageImport.takePending();
+        if (pending != null) _openImported(pending);
+      });
+    }
+  }
+
+  void _openImported(String path) {
+    final navigator = _navigator.currentState;
+    if (navigator == null) return;
+    navigator
+        .push(
+          MaterialPageRoute<void>(
+            builder: (context) => ModelPage(path: path, strings: S(_russian)),
+          ),
+        )
+        .then((_) => _library.currentState?.scan());
+  }
+
+  void _showImportError(String message) {
+    final context = _navigator.currentContext;
+    if (context == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
     final strings = S(_russian);
     return MaterialApp(
+      navigatorKey: _navigator,
       title: strings.appTitle,
       debugShowCheckedModeBanner: false,
       themeMode: _mode,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      home: Scaffold(
-        body: widget.autoOpenPath != null
-            ? ModelPage(path: widget.autoOpenPath!, strings: strings)
-            : LibraryPage(strings: strings, initialDirectory: widget.initialLibrary),
-        floatingActionButton: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            FloatingActionButton.small(
-              heroTag: 'theme',
-              tooltip: strings.theme,
-              onPressed: () => setState(() {
-                _mode = _mode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-              }),
-              child: Icon(_mode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode),
-            ),
-            const SizedBox(height: 8),
-            FloatingActionButton.small(
-              heroTag: 'lang',
-              tooltip: strings.language,
-              onPressed: () => setState(() => _russian = !_russian),
-              child: Text(_russian ? 'EN' : 'RU'),
-            ),
-          ],
-        ),
-      ),
+      builder: (context, child) {
+        return AppearanceScope(
+          strings: strings,
+          dark: _mode == ThemeMode.dark,
+          onTheme: () => setState(() {
+            _mode = _mode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+          }),
+          onLanguage: () => setState(() => _russian = !_russian),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+      home: widget.autoOpenPath != null
+          ? ModelPage(path: widget.autoOpenPath!, strings: strings)
+          : LibraryPage(key: _library, strings: strings, initialDirectory: widget.initialLibrary),
     );
   }
 

@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.44.1'
           cache: true
       - name: System packages
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libsqlite3-0
@@ -100,3 +100,26 @@ jobs:
           flutter pub get
           flutter analyze
           FBV_CORE_LIB="$GITHUB_WORKSPACE/build/linux-gcc/core/libfbv_core.so" flutter test
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          cache: true
+      # v3 still installs the removed SDK package `tools` and fails the job.
+      - uses: android-actions/setup-android@v4
+      - name: Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platforms;android-37.0" "platforms;android-36" "platforms;android-35" "build-tools;36.0.0" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+      - name: Build debug APK
+        working-directory: app
+        run: flutter build apk --debug --target-platform android-arm64,android-x64
