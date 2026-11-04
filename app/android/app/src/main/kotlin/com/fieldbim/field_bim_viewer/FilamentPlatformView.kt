@@ -145,6 +145,9 @@ class FilamentPlatformView(
     private var preset = "iso"
     private var destroyed = false
     private var framed = false
+    private var framedBox: FloatArray? = null
+    private var framedAspect = 0.0
+    private val replaced = HashSet<Long>()
     private var lastFrame = 0L
     private var downX = 0f
     private var downY = 0f
@@ -577,6 +580,7 @@ class FilamentPlatformView(
                         "upload finished files=$uploadsDone total=$uploadsTotal " +
                             "standIns=${pendingStandIns().size} partial=$partialScene",
                     )
+                    releasePreviewAssets()
                 }
                 return
             }
@@ -653,8 +657,17 @@ class FilamentPlatformView(
     }
 
     private fun applyRootTurn(asset: FilamentAsset) {
-        val instance = engine.transformManager.getInstance(asset.root)
-        if (instance != 0) engine.transformManager.setTransform(instance, Z_TO_Y)
+        val tm = engine.transformManager
+        var instance = tm.getInstance(asset.root)
+        if (instance == 0) {
+            tm.create(asset.root)
+            instance = tm.getInstance(asset.root)
+        }
+        if (instance != 0) {
+            tm.setTransform(instance, Z_TO_Y)
+        } else {
+            Log.w(TAG, "root transform missing")
+        }
     }
 
     private fun ensureSelected(id: Long) {
@@ -779,6 +792,7 @@ class FilamentPlatformView(
             if (entity == 0 || elementByEntity.containsKey(entity)) continue
             val id = elementId(asset.getExtras(entity)) ?: asset.getName(entity)?.toLongOrNull()
             if (id != null && id != 0L) {
+                if (proxy && id in replaced) continue
                 elementByEntity[entity] = id
                 if (proxy) proxyEntities.add(entity) else found.add(id)
             }
@@ -793,11 +807,38 @@ class FilamentPlatformView(
         val drop = ArrayList<FilamentAsset>()
         for (asset in previewAssets) {
             if (asset == activeAsset) continue
-            val still = asset.entities.any { it != 0 && it in proxyEntities }
+            val still = asset.entities.any { entity ->
+                entity != 0 && entity in proxyEntities && elementByEntity[entity]?.let { it !in replaced } == true
+            }
             if (!still) drop.add(asset)
         }
         if (drop.isEmpty()) return
+        destroyPreviewAssets(drop)
+    }
+
+    /** The preview GLB is only a placeholder. Real meshes have replaced it by the time the queue is idle. */
+    private fun releasePreviewAssets() {
+        if (!engineAlive || previewAssets.isEmpty()) return
+        val drop = previewAssets.filter { it != activeAsset }
+        if (drop.isEmpty()) return
+        destroyPreviewAssets(drop)
+    }
+
+    private fun destroyPreviewAssets(drop: List<FilamentAsset>) {
         for (asset in drop) {
+            for (entity in asset.entities) {
+                if (inScene.remove(entity)) scene.remove(entity)
+                elementByEntity.remove(entity)
+                originals.remove(entity)
+                proxyEntities.remove(entity)
+                val tint = tinted.remove(entity)
+                if (tint != null) {
+                    try {
+                        engine.destroyMaterialInstance(tint)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
             assets.remove(asset)
             proxyAssets.remove(asset)
             previewAssets.remove(asset)
@@ -811,7 +852,9 @@ class FilamentPlatformView(
     }
 
     private fun retireProxies(ids: Collection<Long>) {
-        if (ids.isEmpty() || proxyEntities.isEmpty()) return
+        if (ids.isEmpty()) return
+        replaced.addAll(ids)
+        if (proxyEntities.isEmpty()) return
         val wanted = ids.toHashSet()
         val drop = ArrayList<Int>()
         for ((entity, id) in elementByEntity) {
@@ -893,6 +936,10 @@ class FilamentPlatformView(
         if (entity == 0 || elementByEntity.containsKey(entity)) return
         val id = elementId(asset.getExtras(entity)) ?: asset.getName(entity)?.toLongOrNull()
         if (id != null && id != 0L) {
+            if (asset in proxyAssets && id in replaced) {
+                if (inScene.remove(entity)) scene.remove(entity)
+                return
+            }
             elementByEntity[entity] = id
             if (asset in proxyAssets) proxyEntities.add(entity) else retireProxies(listOf(id))
         }
@@ -972,38 +1019,41 @@ class FilamentPlatformView(
     }
 
     private fun frame(box: FloatArray?, cameraPreset: String) {
-        val bounds = box ?: return
+        val bounds = box
+        if (bounds == null || bounds.size < 6) {
+            Log.i(TAG, "frame skipped")
+            return
+        }
         frameMin = bounds.copyOfRange(0, 3)
         frameMax = bounds.copyOfRange(3, 6)
-        val cx = (frameMin[0] + frameMax[0]) * 0.5f
-        val cy = (frameMin[1] + frameMax[1]) * 0.5f
-        val cz = (frameMin[2] + frameMax[2]) * 0.5f
-        val hx = (frameMax[0] - frameMin[0]) * 0.5f
-        val hy = (frameMax[1] - frameMin[1]) * 0.5f
-        val hz = (frameMax[2] - frameMin[2]) * 0.5f
-        val radius = max(0.5f, max(hx, max(hy, hz)))
-        val distance = radius * 2.8f
-        val dir = when (cameraPreset) {
-            "front" -> floatArrayOf(0f, 0f, 1f)
-            "back" -> floatArrayOf(0f, 0f, -1f)
-            "left" -> floatArrayOf(-1f, 0f, 0f)
-            "right" -> floatArrayOf(1f, 0f, 0f)
-            "top" -> floatArrayOf(0f, 1f, 0.04f)
-            "bottom" -> floatArrayOf(0f, -1f, 0.04f)
-            else -> floatArrayOf(0.75f, 0.55f, 0.85f)
+        val aspect = if (viewportW > 1 && viewportH > 1) {
+            viewportW.toDouble() / viewportH.toDouble()
+        } else {
+            1.0
         }
-        val len = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
-        val eye = floatArrayOf(cx + dir[0] / len * distance, cy + dir[1] / len * distance, cz + dir[2] / len * distance)
-        near = max(0.02, radius / 200.0)
-        far = max(distance.toDouble() * 40.0, 1000.0)
+        val pose = CameraFit.pose(bounds, cameraPreset, aspect)
+        framedBox = bounds.copyOf()
+        framedAspect = aspect
+        near = max(0.02, pose.radius / 200.0)
+        far = max(pose.distance.toDouble() * 4.0, pose.distance.toDouble() + pose.radius * 8.0)
         manipulator = Manipulator.Builder()
             .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
-            .targetPosition(cx, cy, cz)
-            .orbitHomePosition(eye[0], eye[1], eye[2])
+            .targetPosition(pose.targetX, pose.targetY, pose.targetZ)
+            .orbitHomePosition(pose.eyeX, pose.eyeY, pose.eyeZ)
+            .upVector(0f, 1f, 0f)
+            .fovDegrees(CameraFit.fovDegrees.toFloat())
+            .fovDirection(Manipulator.Fov.VERTICAL)
+            .farPlane(far.toFloat())
             .build(Manipulator.Mode.ORBIT)
         gesture = GestureDetector(surfaceView, manipulator!!)
         framed = true
         updateProjection()
+        Log.i(
+            TAG,
+            "frame target=${pose.targetX},${pose.targetY},${pose.targetZ} " +
+                "eye=${pose.eyeX},${pose.eyeY},${pose.eyeZ} " +
+                "dist=${pose.distance} radius=${pose.radius} aspect=$aspect preset=$cameraPreset",
+        )
     }
 
     private fun allBox(): FloatArray? {
@@ -1157,6 +1207,9 @@ class FilamentPlatformView(
         records.clear()
         deferred.clear()
         standInIds.clear()
+        replaced.clear()
+        framedBox = null
+        framedAspect = 0.0
         activeMapped = null
         activeStream = null
         framed = false
@@ -1249,13 +1302,19 @@ class FilamentPlatformView(
             }
         }
 
-        override fun onResized(width: Int, height: Int) {
+            override fun onResized(width: Int, height: Int) {
             renderHandler.post {
                 if (destroyed || !engineAlive) return@post
-                viewportW = width.coerceAtLeast(1)
-                viewportH = height.coerceAtLeast(1)
+                if (width < 2 || height < 2) return@post
+                viewportW = width
+                viewportH = height
                 view.viewport = Viewport(0, 0, viewportW, viewportH)
                 manipulator?.setViewport(viewportW, viewportH)
+                val aspect = viewportW.toDouble() / viewportH.toDouble()
+                val box = framedBox
+                if (box != null && kotlin.math.abs(aspect - framedAspect) > 0.05) {
+                    frame(box, preset)
+                }
                 updateProjection()
                 val fence = engine.createFence()
                 fence.wait(Fence.Mode.FLUSH, Fence.WAIT_FOR_EVER)

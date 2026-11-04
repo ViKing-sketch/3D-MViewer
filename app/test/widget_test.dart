@@ -184,12 +184,29 @@ void main() {
     await tester.tap(find.text('Дерево'));
     await tester.pumpAndSettle();
     expect(find.text('Wall W-1'), findsOneWidget);
+    await tester.tap(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+      }),
+    );
+    await tester.pump();
+    await tester.tap(find.text('3D'));
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.context?.widget is EditableText,
+      isFalse,
+    );
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Wall W-1'));
     await tester.tap(find.text('Wall W-1'));
     await tester.pump();
     await tester.tap(find.text('3D'));
     await tester.pumpAndSettle();
     expect(find.text('Свойства'), findsOneWidget);
+    expect(find.text('Wall W-1'), findsWidgets);
+    expect(find.text('IfcWall'), findsOneWidget);
     await tester.drag(find.text('Свойства'), const Offset(0, -420));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -213,6 +230,25 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Wall W-1'), findsOneWidget);
+    await tester.enterText(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+      }),
+      'Column',
+    );
+    await tester.pump();
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pump();
+    final field = tester.widget<TextField>(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+      }),
+    );
+    expect(field.controller?.text, 'Column');
+    expect(find.text('Column C-1'), findsOneWidget);
+    expect(find.text('Wall W-1'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

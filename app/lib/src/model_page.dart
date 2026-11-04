@@ -51,6 +51,7 @@ class _ModelPageState extends State<ModelPage>
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
+    _tabs.addListener(_onTab);
     final type = FileSystemEntity.typeSync(widget.path);
     if (type == FileSystemEntityType.file) {
       _opening = true;
@@ -136,10 +137,18 @@ class _ModelPageState extends State<ModelPage>
     if (navigator.canPop()) navigator.pop();
   }
 
+  void _onTab() {
+    if (_tabs.indexIsChanging) {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _cancel = true;
     _cancelExtract?.call();
+    _tabs.removeListener(_onTab);
     _tabs.dispose();
     _session?.close();
     super.dispose();
@@ -279,9 +288,61 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  bool get _phoneLandscape {
+    final size = MediaQuery.sizeOf(context);
+    return size.width > size.height && size.width < 1100;
+  }
+
+  Widget _title(S strings) {
+    final name = _session?.summary.name ?? strings.appTitle;
+    final label = Text(name, maxLines: 1, overflow: TextOverflow.ellipsis);
+    if (!_phoneLandscape || _session == null || _opening) return label;
+    final labels = [strings.view3d, strings.tree, strings.specification];
+    return Row(
+      children: [
+        Flexible(child: label),
+        for (var i = 0; i < labels.length; i++)
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: _tabs.index == i
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.onSurface,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: const Size(36, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: () => _tabs.animateTo(i),
+            child: Text(labels[i]),
+          ),
+      ],
+    );
+  }
+
+  /// The 3D page stays mounted. A [TabBarView] would dispose the platform view,
+  /// and the next visit would plan the whole scene again instead of streaming
+  /// one element into it.
+  Widget _pages() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Offstage(
+          offstage: _tabs.index != 0,
+          child: TickerMode(
+            enabled: _tabs.index == 0,
+            child: _viewTab(context),
+          ),
+        ),
+        if (_tabs.index == 1) _treeTab(context),
+        if (_tabs.index == 2) _specTab(context),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = widget.strings;
+    final phoneLandscape = _phoneLandscape;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -291,8 +352,11 @@ class _ModelPageState extends State<ModelPage>
         appBar: AppBar(
           leading: BackButton(onPressed: () => unawaited(_leave())),
           automaticallyImplyLeading: false,
-          title: Text(_session?.summary.name ?? strings.appTitle),
-          bottom: _session == null || _opening
+          toolbarHeight: phoneLandscape ? 48 : null,
+          titleSpacing: phoneLandscape ? 0 : null,
+          title: _title(strings),
+          actions: const [AppearanceMenu()],
+          bottom: _session == null || _opening || phoneLandscape
               ? null
               : TabBar(
                   controller: _tabs,
@@ -305,7 +369,6 @@ class _ModelPageState extends State<ModelPage>
                   ],
                 ),
         ),
-        floatingActionButton: const AppearanceButtons(tag: 'model'),
         body: Stack(
           children: [
             if (!_closing)
@@ -314,14 +377,7 @@ class _ModelPageState extends State<ModelPage>
                     ? Center(child: Text(_error!))
                     : _opening || _session == null
                     ? _extracting(strings)
-                    : TabBarView(
-                        controller: _tabs,
-                        children: [
-                          _viewTab(context),
-                          _treeTab(context),
-                          _specTab(context),
-                        ],
-                      ),
+                    : _pages(),
               ),
             if (_closing)
               const Positioned.fill(
@@ -461,21 +517,83 @@ class _ModelPageState extends State<ModelPage>
     final strings = widget.strings;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final side = (constraints.maxWidth * 0.46).clamp(0.0, 380.0).toDouble();
-        return Column(
+        final side = (constraints.maxWidth * 0.42)
+            .clamp(220.0, 360.0)
+            .toDouble();
+        return Row(
           children: [
-            _renderBar(strings),
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(child: viewport),
-                  SizedBox(width: side, child: _properties(context, selected)),
-                ],
-              ),
-            ),
+            _cameraRail(strings),
+            Expanded(child: viewport),
+            SizedBox(width: side, child: _properties(context, selected)),
           ],
         );
       },
+    );
+  }
+
+  Widget _cameraRail(S strings) {
+    final style = IconButton.styleFrom(
+      padding: EdgeInsets.zero,
+      minimumSize: const Size(40, 40),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    return SizedBox(
+      width: 48,
+      child: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        children: [
+          IconButton(
+            tooltip: strings.fitAll,
+            style: style,
+            onPressed: () => _viewport.currentState?.fitAll(),
+            icon: const Icon(Icons.fit_screen),
+          ),
+          IconButton(
+            tooltip: strings.fitSelected,
+            style: style,
+            onPressed: () => _viewport.currentState?.fitSelected(),
+            icon: const Icon(Icons.center_focus_strong),
+          ),
+          IconButton(
+            tooltip: strings.hide,
+            style: style,
+            onPressed: _hideSelected,
+            icon: const Icon(Icons.visibility_off_outlined),
+          ),
+          IconButton(
+            tooltip: strings.showAll,
+            style: style,
+            onPressed: _showAll,
+            icon: const Icon(Icons.visibility_outlined),
+          ),
+          IconButton(
+            tooltip: strings.isolate,
+            style: style,
+            onPressed: _isolateSelected,
+            icon: const Icon(Icons.filter_center_focus),
+          ),
+          IconButton(
+            tooltip: strings.xray,
+            style: style,
+            onPressed: _toggleXray,
+            icon: const Icon(Icons.blur_on),
+          ),
+          PopupMenuButton<String>(
+            tooltip: strings.cameraViews,
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.videocam_outlined),
+            onSelected: (preset) => _viewport.currentState?.setCamera(preset),
+            itemBuilder: (context) => [
+              PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
+              PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
+              PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
+              PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
+              PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
+              PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -493,12 +611,9 @@ class _ModelPageState extends State<ModelPage>
   Widget _elementSearch(S strings) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: TextField(
-        decoration: InputDecoration(
-          hintText: strings.searchHint,
-          prefixIcon: const Icon(Icons.search),
-          border: const OutlineInputBorder(),
-        ),
+      child: _RememberedField(
+        value: _query,
+        hint: strings.searchHint,
         onChanged: (value) => setState(() => _query = value),
       ),
     );
@@ -662,19 +777,17 @@ class _ModelPageState extends State<ModelPage>
       final value = _displayValue(prop.valueText);
       final group = prop.pset.isEmpty ? strings.properties : prop.pset;
       if (!hit(prop.name, group, value)) continue;
-      groups
-          .putIfAbsent(group, () => [])
-          .add(_valueRow(prop.name, prop.pset, value));
+      groups.putIfAbsent(group, () => []).add(_valueRow(prop.name, value));
     }
     final quantityRows = <Widget>[
       for (final quantity in quantities)
         if (hit(quantity.name, quantity.qset, _displayQuantity(quantity)))
-          _valueRow(quantity.name, quantity.qset, _displayQuantity(quantity)),
+          _valueRow(quantity.name, _displayQuantity(quantity)),
     ];
     final classRows = <Widget>[
       for (final item in classes)
         if (hit(item.code, item.system, item.title))
-          _valueRow(item.code, item.system, item.title),
+          _valueRow(item.code, item.title, detail: item.system),
     ];
     return SelectionArea(
       child: CustomScrollView(
@@ -691,14 +804,18 @@ class _ModelPageState extends State<ModelPage>
                     strings.properties,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    element.name.isEmpty ? element.ifcClass : element.name,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  if (element.name.isNotEmpty && element.ifcClass.isNotEmpty)
+                    Text(element.ifcClass),
                   const SizedBox(height: 8),
-                  TextField(
-                    decoration: InputDecoration(
-                      hintText: strings.propertySearch,
-                      prefixIcon: const Icon(Icons.search),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
+                  _RememberedField(
+                    value: _propQuery,
+                    hint: strings.propertySearch,
+                    dense: true,
                     onChanged: (value) => setState(() => _propQuery = value),
                   ),
                   const SizedBox(height: 8),
@@ -760,7 +877,7 @@ class _ModelPageState extends State<ModelPage>
     ];
   }
 
-  Widget _valueRow(String name, String group, String value) {
+  Widget _valueRow(String name, String value, {String? detail}) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -768,7 +885,8 @@ class _ModelPageState extends State<ModelPage>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(name),
-          if (group.isNotEmpty) Text(group, style: theme.textTheme.bodySmall),
+          if (detail != null && detail.isNotEmpty)
+            Text(detail, style: theme.textTheme.bodySmall),
           Text(value),
         ],
       ),
@@ -897,5 +1015,63 @@ class _GroupHeader extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(_GroupHeader oldDelegate) {
     return oldDelegate.title != title || oldDelegate.expanded != expanded;
+  }
+}
+
+/// Keeps typed text when the field is recreated, including across rotation.
+/// The parent string is the source of truth. Two fields cannot share one
+/// controller, because the wide layout mounts the tree search and the 3D page
+/// at the same time.
+class _RememberedField extends StatefulWidget {
+  const _RememberedField({
+    required this.value,
+    required this.hint,
+    required this.onChanged,
+    this.dense = false,
+  });
+
+  final String value;
+  final String hint;
+  final ValueChanged<String> onChanged;
+  final bool dense;
+
+  @override
+  State<_RememberedField> createState() => _RememberedFieldState();
+}
+
+class _RememberedFieldState extends State<_RememberedField> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value,
+  );
+
+  @override
+  void didUpdateWidget(_RememberedField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != _controller.text) {
+      _controller.value = TextEditingValue(
+        text: widget.value,
+        selection: TextSelection.collapsed(offset: widget.value.length),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      decoration: InputDecoration(
+        hintText: widget.hint,
+        prefixIcon: const Icon(Icons.search),
+        border: const OutlineInputBorder(),
+        isDense: widget.dense,
+      ),
+      onChanged: widget.onChanged,
+    );
   }
 }

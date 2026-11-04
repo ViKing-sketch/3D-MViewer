@@ -89,7 +89,9 @@ class LibraryPageState extends State<LibraryPage> {
       final data = await rootBundle.load('assets/sample_model/$relative');
       final file = File(p.join(temp.path, relative));
       file.parent.createSync(recursive: true);
-      await file.writeAsBytes(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+      await file.writeAsBytes(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      );
     }
     if (!mounted) return;
     await _open(temp.path);
@@ -112,8 +114,14 @@ class LibraryPageState extends State<LibraryPage> {
         title: Text(strings.delete),
         content: Text(strings.deleteConfirm),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(strings.cancel)),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(strings.delete)),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(strings.delete),
+          ),
         ],
       ),
     );
@@ -126,8 +134,10 @@ class LibraryPageState extends State<LibraryPage> {
   Widget build(BuildContext context) {
     final strings = widget.strings;
     return Scaffold(
-      appBar: AppBar(title: Text(strings.library)),
-      floatingActionButton: const AppearanceButtons(tag: 'library'),
+      appBar: AppBar(
+        title: Text(strings.library),
+        actions: const [AppearanceMenu()],
+      ),
       body: Column(
         children: [
           if (Platform.isAndroid)
@@ -156,11 +166,13 @@ class LibraryPageState extends State<LibraryPage> {
                         FocusManager.instance.primaryFocus?.unfocus();
                         scan();
                       },
-                      onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+                      onTapOutside: (_) =>
+                          FocusManager.instance.primaryFocus?.unfocus(),
                     ),
                   ),
                 if (!Platform.isAndroid) const SizedBox(width: 8),
-                if (!Platform.isAndroid) FilledButton(onPressed: scan, child: Text(strings.scan)),
+                if (!Platform.isAndroid)
+                  FilledButton(onPressed: scan, child: Text(strings.scan)),
                 if (Platform.isAndroid)
                   FilledButton.icon(
                     onPressed: _import,
@@ -174,10 +186,14 @@ class LibraryPageState extends State<LibraryPage> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: FilledButton.tonal(onPressed: _openSample, child: Text(strings.openSample)),
+              child: FilledButton.tonal(
+                onPressed: _openSample,
+                child: Text(strings.openSample),
+              ),
             ),
           ),
-          if (_error != null) Padding(padding: const EdgeInsets.all(12), child: Text(_error!)),
+          if (_error != null)
+            Padding(padding: const EdgeInsets.all(12), child: Text(_error!)),
           Expanded(
             child: _packages.isEmpty
                 ? Center(child: Text(strings.emptyLibrary))
@@ -189,7 +205,9 @@ class LibraryPageState extends State<LibraryPage> {
                       return ListTile(
                         minTileHeight: 64,
                         title: Text(package.name),
-                        subtitle: Text('${package.schema} · ${package.elementCount} · $kb KB'),
+                        subtitle: Text(
+                          '${package.schema} · ${package.elementCount} · $kb KB',
+                        ),
                         onTap: () => _open(package.path),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline),

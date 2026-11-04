@@ -23,35 +23,32 @@ class AppearanceScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(AppearanceScope oldWidget) {
-    return strings.russian != oldWidget.strings.russian || dark != oldWidget.dark;
+    return strings.russian != oldWidget.strings.russian ||
+        dark != oldWidget.dark;
   }
 }
 
-class AppearanceButtons extends StatelessWidget {
-  const AppearanceButtons({super.key, this.tag = 'home'});
-
-  final String tag;
+/// Theme and language live in the app bar so they do not cover the sheet or lists.
+class AppearanceMenu extends StatelessWidget {
+  const AppearanceMenu({super.key});
 
   @override
   Widget build(BuildContext context) {
     final scope = AppearanceScope.maybeOf(context);
     if (scope == null) return const SizedBox.shrink();
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        FloatingActionButton.small(
-          heroTag: '$tag-theme',
-          tooltip: scope.strings.theme,
-          onPressed: scope.onTheme,
-          child: Icon(scope.dark ? Icons.light_mode : Icons.dark_mode),
-        ),
-        const SizedBox(height: 8),
-        FloatingActionButton.small(
-          heroTag: '$tag-lang',
-          tooltip: scope.strings.language,
-          onPressed: scope.onLanguage,
-          child: Text(scope.strings.russian ? 'EN' : 'RU'),
+    final strings = scope.strings;
+    return PopupMenuButton<String>(
+      tooltip: strings.theme,
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) {
+        if (value == 'theme') scope.onTheme();
+        if (value == 'language') scope.onLanguage();
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(value: 'theme', child: Text(strings.theme)),
+        PopupMenuItem(
+          value: 'language',
+          child: Text(strings.russian ? 'EN' : 'RU'),
         ),
       ],
     );
