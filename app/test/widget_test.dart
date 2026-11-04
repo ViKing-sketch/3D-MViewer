@@ -5,11 +5,21 @@ import 'package:field_bim_viewer/src/model.dart';
 import 'package:field_bim_viewer/src/model_page.dart';
 import 'package:field_bim_viewer/src/strings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 String _repoFile(String relative) =>
     p.normalize(p.join(Directory.current.path, '..', relative));
+
+IconButton _tool(WidgetTester tester, String tooltip) {
+  return tester.widget<IconButton>(
+    find.ancestor(
+      of: find.byTooltip(tooltip),
+      matching: find.byType(IconButton),
+    ),
+  );
+}
 
 Future<void> pumpFor(WidgetTester tester, Finder finder) async {
   // Zip open copies on a background isolate. pump() only advances the fake
@@ -181,13 +191,17 @@ void main() {
     expect(find.text('Дерево'), findsOneWidget);
     expect(find.text('Выберите элемент'), findsOneWidget);
     expect(find.byTooltip('Меню'), findsOneWidget);
-    expect(
-      find.byTooltip(
-        'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.byTooltip('Рентген'), findsOneWidget);
+    expect(_tool(tester, 'Рентген').onPressed, isNull);
+    expect(find.byTooltip('Срез'), findsOneWidget);
+    expect(find.byTooltip('Изолировать'), findsOneWidget);
+    expect(_tool(tester, 'Изолировать').onPressed, isNull);
+    expect(find.byTooltip('Камера по умолчанию'), findsOneWidget);
+    await tester.tap(find.byTooltip('Действия'));
+    await tester.pumpAndSettle();
     expect(find.text('Показать всё'), findsOneWidget);
+    await tester.tap(find.text('Показать всё'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Дерево'));
     await tester.pumpAndSettle();
@@ -214,6 +228,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Свойства'), findsOneWidget);
     expect(find.text('Wall W-1'), findsWidgets);
+    expect(_tool(tester, 'Рентген').onPressed, isNotNull);
+    expect(_tool(tester, 'Изолировать').onPressed, isNotNull);
     expect(find.text('IfcWall'), findsOneWidget);
     await tester.drag(find.text('Свойства'), const Offset(0, -420));
     await tester.pump();
@@ -257,6 +273,69 @@ void main() {
     expect(field.controller?.text, 'Column');
     expect(find.text('Column C-1'), findsOneWidget);
     expect(find.text('Wall W-1'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('section hint explains the clip in both languages', () {
+    expect(const S(true).section, 'Срез');
+    expect(const S(true).sectionHint, contains('не зависит от зума'));
+    expect(const S(false).section, 'Section');
+    expect(const S(false).sectionHint, contains('zoom'));
+  });
+
+  testWidgets('section mode shows the clipping hint', (tester) async {
+    // Landscape under 1100px uses the icon rail, which is short enough that
+    // the section control is built. The wide text bar lazily skips it.
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    final toggle = find.byKey(const ValueKey('section-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.byTooltip(const S(true).section), findsOneWidget);
+    expect(find.textContaining('не зависит от зума'), findsNothing);
+    expect(find.byKey(const ValueKey('section-offset')), findsOneWidget);
+    expect(find.byKey(const ValueKey('section-flip')), findsOneWidget);
+    expect(find.text('По взгляду'), findsOneWidget);
+    expect(find.byKey(const ValueKey('section-near')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('section-more')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.byKey(const ValueKey('section-near')), findsOneWidget);
+    expect(find.text('Коробка'), findsOneWidget);
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('section-inset')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('short landscape parks the section strip on the side', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 390);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('section-toggle')));
+    await tester.pump();
+    final slider = find.byKey(const ValueKey('section-offset'));
+    expect(slider, findsOneWidget);
+    final width = tester.getSize(slider).width;
+    expect(width, lessThan(220));
+    expect(tester.getTopLeft(slider).dx, greaterThan(240));
+    final label = tester.renderObject<RenderParagraph>(find.text('По взгляду'));
+    expect(
+      label.size.width + 1,
+      greaterThanOrEqualTo(label.getMaxIntrinsicWidth(double.infinity)),
+    );
     expect(tester.takeException(), isNull);
   });
 }

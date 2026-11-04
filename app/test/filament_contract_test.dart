@@ -63,12 +63,24 @@ void main() {
       isolated: const [2],
       xray: true,
     );
+    await commands.setSection(
+      const SectionView(
+        enabled: true,
+        near: 0.4,
+        axis: 'view',
+        flip: true,
+        offset: -0.25,
+        box: true,
+        inset: 0.3,
+      ),
+    );
     await commands.fit(selected: true);
     await commands.setCamera('top');
     await commands.release();
     expect(calls.map((call) => call.method).toList(), [
       'sync',
       'setViewState',
+      'setSection',
       'fit',
       'setCamera',
       'release',
@@ -79,8 +91,16 @@ void main() {
     expect(view['isolated'], [2]);
     expect(view['xray'], isTrue);
     expect(view['frame'], isFalse);
-    expect((calls[2].arguments as Map)['selected'], isTrue);
-    expect((calls[3].arguments as Map)['preset'], 'top');
+    final section = calls[2].arguments as Map<dynamic, dynamic>;
+    expect(section['enabled'], isTrue);
+    expect(section['near'], 0.4);
+    expect(section['axis'], 'view');
+    expect(section['flip'], isTrue);
+    expect(section['offset'], -0.25);
+    expect(section['box'], isTrue);
+    expect(section['inset'], 0.3);
+    expect((calls[3].arguments as Map)['selected'], isTrue);
+    expect((calls[4].arguments as Map)['preset'], 'top');
   });
 }
 

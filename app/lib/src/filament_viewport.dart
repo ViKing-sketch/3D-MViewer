@@ -25,12 +25,14 @@ class FilamentViewport extends StatefulWidget {
     this.hiddenIds = const {},
     this.isolatedIds = const {},
     this.xray = false,
+    this.section = const SectionView(),
     this.renderRevision = 0,
     this.frameToken = 0,
     this.bottomInset = 0,
     this.onPick,
     this.onStatus,
     this.onStandIns,
+    this.onSectionSpan,
   });
 
   final S strings;
@@ -41,6 +43,7 @@ class FilamentViewport extends StatefulWidget {
   final Set<int> hiddenIds;
   final Set<int> isolatedIds;
   final bool xray;
+  final SectionView section;
   final int renderRevision;
   final int frameToken;
 
@@ -49,6 +52,7 @@ class FilamentViewport extends StatefulWidget {
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
   final ValueChanged<Set<int>>? onStandIns;
+  final void Function(double half, double box, double at)? onSectionSpan;
 
   @override
   State<FilamentViewport> createState() => FilamentViewportState();
@@ -57,6 +61,7 @@ class FilamentViewport extends StatefulWidget {
 class FilamentViewportState extends State<FilamentViewport> {
   FilamentCommands? _commands;
   String? _status;
+  String? _statusCode;
   int _appliedFrame = 0;
 
   Future<void> fitAll() =>
@@ -84,6 +89,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     if ((oldWidget.bottomInset - widget.bottomInset).abs() > 0.001) {
       _commands?.setFitInset(widget.bottomInset);
     }
+    if (oldWidget.section != widget.section) _pushSection();
     if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
       _commands?.load(widget.rootPath!);
     }
@@ -102,6 +108,20 @@ class FilamentViewportState extends State<FilamentViewport> {
       } else if (call.method == 'onStatus') {
         final args = call.arguments;
         if (args is Map) _applyStatus(args);
+      } else if (call.method == 'onSection') {
+        final args = call.arguments;
+        if (args is Map) {
+          final half = args['half'];
+          final box = args['box'];
+          if (half is num && box is num) {
+            final at = args['at'];
+            widget.onSectionSpan?.call(
+              half.toDouble(),
+              box.toDouble(),
+              at is num ? at.toDouble() : 0,
+            );
+          }
+        }
       }
       return null;
     });
@@ -113,6 +133,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     await commands.setFitInset(widget.bottomInset);
     if (widget.rootPath != null) await commands.load(widget.rootPath!);
     await _pushState();
+    await _pushSection();
   }
 
   void _applyStatus(Map<dynamic, dynamic> raw) {
@@ -144,7 +165,10 @@ class FilamentViewportState extends State<FilamentViewport> {
     } else {
       text = raw['message']?.toString() ?? code;
     }
-    setState(() => _status = text);
+    setState(() {
+      _statusCode = code;
+      _status = text;
+    });
     widget.onStatus?.call(text);
   }
 
@@ -162,6 +186,12 @@ class FilamentViewportState extends State<FilamentViewport> {
     );
   }
 
+  Future<void> _pushSection() async {
+    final commands = _commands;
+    if (commands == null) return;
+    await commands.setSection(widget.section);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!Platform.isAndroid || widget.rootPath == null) {
@@ -171,23 +201,38 @@ class FilamentViewportState extends State<FilamentViewport> {
         selectedName: widget.selectedName,
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final showStatus = _status != null &&
+        _statusCode != 'ready' &&
+        _statusCode != 'idle';
+    return Stack(
+      fit: StackFit.expand,
       children: [
-        if (_status != null)
-          Material(
-            color: Theme.of(context).colorScheme.surface,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Text(
-                _status!,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
+        ClipRect(child: _platformView(context)),
+        if (showStatus)
+          Positioned(
+            left: 8,
+            right: 8,
+            top: 48,
+            child: IgnorePointer(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Material(
+                  color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      _status!,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        Expanded(child: ClipRect(child: _platformView(context))),
       ],
     );
   }

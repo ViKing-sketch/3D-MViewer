@@ -63,6 +63,27 @@ class S {
       ? 'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.'
       : 'Other elements turn translucent. The selection stays solid.';
   String get menu => russian ? 'Меню' : 'Menu';
+  String get section => russian ? 'Срез' : 'Section';
+  String get sectionHint => russian
+      ? 'Плоскость X, Y (вверх), Z или по взгляду отсекает в материале и не зависит от зума. Лицевые грани остаются освещёнными, срез — цветом обратных граней. Рентген и подсветка выбора продолжают работать. Касание не выбирает отсечённое.'
+      : 'An X, Y (up), Z, or view plane clips in the material and stays put when you zoom. Front faces stay lit, and the cut is the back-face colour. X-ray and the selection highlight keep working. Taps ignore clipped geometry.';
+  String get sectionNear => russian ? 'Ближняя' : 'Near';
+  String get sectionOffset => russian ? 'Сдвиг' : 'Offset';
+  String sectionOffsetAt(String axis, double metres) => russian
+      ? '$axis · ${metres.toStringAsFixed(1)} м'
+      : '$axis · ${metres.toStringAsFixed(1)} m';
+  String sectionBoxMetres(double metres) => russian
+      ? 'Коробка · ${metres.toStringAsFixed(1)} м'
+      : 'Box · ${metres.toStringAsFixed(1)} m';
+  String get sectionMore => russian ? 'Ещё' : 'More';
+  String get sectionLess => russian ? 'Скрыть' : 'Less';
+  String get sectionFlip => russian ? 'Сторона' : 'Side';
+  String get sectionBox => russian ? 'Коробка' : 'Box';
+  String get sectionBoxHint => russian
+      ? 'Оставляет только объём внутри коробки'
+      : 'Keeps only what is inside the box';
+  String get sectionInset => russian ? 'Размер коробки' : 'Box size';
+  String get sectionView => russian ? 'По взгляду' : 'View';
   String get viewFront => russian ? 'Спереди' : 'Front';
   String get viewBack => russian ? 'Сзади' : 'Back';
   String get viewLeft => russian ? 'Слева' : 'Left';
@@ -70,6 +91,8 @@ class S {
   String get viewTop => russian ? 'Сверху' : 'Top';
   String get viewBottom => russian ? 'Снизу' : 'Bottom';
   String get cameraViews => russian ? 'Виды' : 'Views';
+  String get cameraHome => russian ? 'Камера по умолчанию' : 'Default camera';
+  String get actions => russian ? 'Действия' : 'Actions';
   String get loadingMesh => russian ? 'Загрузка меша…' : 'Loading mesh…';
 
   String get closingModel =>

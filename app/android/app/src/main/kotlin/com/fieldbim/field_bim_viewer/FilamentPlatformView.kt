@@ -31,7 +31,6 @@ import com.google.android.filament.gltfio.FilamentAsset
 import com.google.android.filament.gltfio.Gltfio
 import com.google.android.filament.gltfio.ResourceLoader
 import com.google.android.filament.gltfio.UbershaderProvider
-import com.google.android.filament.utils.GestureDetector
 import com.google.android.filament.utils.Manipulator
 import com.google.android.filament.utils.Utils
 import io.flutter.plugin.common.BinaryMessenger
@@ -49,6 +48,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -63,7 +63,7 @@ class FilamentViewFactory(private val messenger: BinaryMessenger) :
  * Native Filament view for channel `fbv/filament`.
  *
  * Orbit, pan and zoom stay in this view. Flutter sends selection, hide,
- * isolate, X-ray and the framed cameras. Package meshes are Z-up; each asset
+ * isolate, X-ray, the section clip and the framed cameras. Package meshes are Z-up; each asset
  * root is turned to Filament Y-up. `mesh/lod0.glb` loads when it fits the
  * source-byte budget. A larger lod0 becomes element GLBs (smallest first)
  * plus box proxies, and selecting a deferred element streams its file.
@@ -108,9 +108,23 @@ class FilamentPlatformView(
     private var engineAlive = false
     private var xrayMaterial: Material? = null
     private var xrayInstance: MaterialInstance? = null
+    private var sectionMaterial: Material? = null
+    private var sectionGhostMaterial: Material? = null
+    private var sectionBody: MaterialInstance? = null
+    private var sectionBodyInward: MaterialInstance? = null
+    private var sectionSelected: MaterialInstance? = null
+    private var sectionSelectedInward: MaterialInstance? = null
+    private var sectionGhost: MaterialInstance? = null
+    private var sectionGhostInward: MaterialInstance? = null
+    private var sectionStandIn: MaterialInstance? = null
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
-    private var gesture: GestureDetector? = null
+    private var gesture: OrbitGestures? = null
+    private var dollyPending = 0f
+    private var dollySpeed = 0.25f
+    private var dollyX = 0
+    private var dollyY = 0
+    private var framedRadius = 1f
 
     private val assets = ArrayList<FilamentAsset>()
     private val proxyAssets = HashSet<FilamentAsset>()
@@ -136,13 +150,28 @@ class FilamentPlatformView(
     private var isolated = HashSet<Long>()
     private var selected = 0L
     private var xray = false
+    private var sectionEnabled = false
+    private var sectionNearAmount = 0.0
+    private var sectionAxis = "x"
+    private var sectionFlip = false
+    private var sectionOffset = 0f
+    private var sectionBox = false
+    private var sectionInset = 0f
+    private var sectionActive = false
+    private var liveClip: SectionClip.Clip? = null
+    private var sentClip: SectionClip.Clip? = null
+    private var publishedAt = Float.NaN
+    private var publishedHalf = Float.NaN
     private var viewportW = 1
     private var viewportH = 1
     private var fitBottomInset = 0.0
     private val cameraView = DoubleArray(16)
     private val cameraProjection = DoubleArray(16)
     private var near = 0.05
+    private var baseNear = 0.05
     private var far = 2000.0
+    private var lastEye = doubleArrayOf(0.0, 0.0, 5.0)
+    private var lastTarget = doubleArrayOf(0.0, 0.0, 0.0)
     private var frameMin = floatArrayOf(-1f, -1f, -1f)
     private var frameMax = floatArrayOf(1f, 1f, 1f)
     private var preset = "iso"
@@ -168,6 +197,7 @@ class FilamentPlatformView(
     private val deferred = HashMap<Long, File>()
     private val retainedBuffers = ArrayList<ByteBuffer>()
     private val standInIds = HashSet<Long>()
+    private val inwardIds = HashSet<Long>()
     private var uploadsDone = 0
     private var uploadsTotal = 0
     private var lastUploadLog = 0L
@@ -265,6 +295,7 @@ class FilamentPlatformView(
         skybox = Skybox.Builder().color(0.83f, 0.87f, 0.91f, 1f).build(engine)
         scene.skybox = skybox
         xrayInstance = loadXray()
+        loadSection()
     }
 
     override fun dispose() {
@@ -345,6 +376,27 @@ class FilamentPlatformView(
                 }
                 result.success(null)
             }
+            "setSection" -> {
+                val enabled = call.argument<Boolean>("enabled") == true
+                val nearAmount = finite(call.argument<Number>("near")?.toDouble() ?: 0.0, 0.0)
+                val axis = call.argument<String>("axis") ?: "x"
+                val flip = call.argument<Boolean>("flip") == true
+                val offset = finite(call.argument<Number>("offset")?.toDouble() ?: 0.0, 0.0).toFloat()
+                val box = call.argument<Boolean>("box") == true
+                val inset = finite(call.argument<Number>("inset")?.toDouble() ?: 0.0, 0.0).toFloat()
+                renderHandler.post {
+                    if (destroyed) return@post
+                    sectionEnabled = enabled
+                    sectionNearAmount = nearAmount.coerceIn(0.0, 1.0)
+                    sectionAxis = axis
+                    sectionFlip = flip
+                    sectionOffset = offset.coerceIn(-1f, 1f)
+                    sectionBox = box
+                    sectionInset = inset.coerceIn(0f, 1f)
+                    syncSection(log = true)
+                }
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }
@@ -371,12 +423,26 @@ class FilamentPlatformView(
     }
 
     private fun load(root: String) {
-        if (destroyed || loadingRoot == root) return
+        if (destroyed) return
+        if (loadingRoot == root) {
+            val ticket = generation.get()
+            renderHandler.post {
+                if (destroyed || loadingRoot != root || ticket != generation.get()) return@post
+                val reload = reportedReady
+                resetViewerState()
+                if (reload) {
+                    frame(allBox(), preset)
+                    applyVisibility()
+                }
+            }
+            return
+        }
         loadingRoot = root
         val ticket = generation.incrementAndGet()
         setStatus(mapOf("code" to "loading", "loaded" to 0, "total" to 0))
         renderHandler.post {
             if (ticket != generation.get() || destroyed) return@post
+            resetViewerState()
             sceneArmed = false
             reportedReady = false
             clearModels()
@@ -486,6 +552,9 @@ class FilamentPlatformView(
         }
         live()
         val standIn = proxyIds.toSet()
+        val inward = LinkedHashSet<Long>()
+        if (lod0.isFile) noteWinding(lod0, inward)
+        for (file in elementGlbs) noteWinding(file, inward)
         val span = SceneBounds.span(SceneBounds.union(geomsZ.values, standIn))
         // Records keep the full element bounds so a selected stand-in is framed
         // to the mesh, not to the clamped orange box.
@@ -510,7 +579,7 @@ class FilamentPlatformView(
         Log.i(
             TAG,
             "plan lod0=$useLod0 files=${gpu.size} standIns=${standIn.size} " +
-                "fitSpan=$span preview=${previewGeoms.size}",
+                "inward=${inward.size} fitSpan=$span preview=${previewGeoms.size}",
         )
         return LoadPlan(
             gpu,
@@ -524,7 +593,44 @@ class FilamentPlatformView(
             proxy,
             preview,
             standIn,
+            inward,
         )
+    }
+
+    /** Element files overwrite lod0, matching [readGeoms]. Failures stay outward. */
+    private fun noteWinding(file: File, inward: MutableSet<Long>) {
+        try {
+            for ((id, sign) in GlbElements.frontSigns(file)) {
+                if (sign < 0f) inward.add(id) else inward.remove(id)
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "winding ${file.name}: ${error.message}")
+        }
+    }
+
+    private fun resetViewerState() {
+        val wasSection = sectionEnabled || sectionActive
+        sectionEnabled = false
+        sectionNearAmount = 0.0
+        sectionAxis = "x"
+        sectionFlip = false
+        sectionOffset = 0f
+        sectionBox = false
+        sectionInset = 0f
+        sectionActive = false
+        liveClip = null
+        sentClip = null
+        publishedAt = Float.NaN
+        publishedHalf = Float.NaN
+        preset = "iso"
+        selected = 0L
+        hidden = HashSet()
+        isolated = HashSet()
+        xray = false
+        manipulator = null
+        gesture = null
+        dollyPending = 0f
+        if (wasSection) Log.i(TAG, "section enabled=false")
     }
 
     private fun readGeoms(file: File): List<ElementGeom> {
@@ -540,6 +646,7 @@ class FilamentPlatformView(
         clearModels()
         records.putAll(plan.geoms)
         standInIds.addAll(plan.standIn)
+        inwardIds.addAll(plan.inward)
         sawLod0 = plan.lod0
         elementFileCount = plan.elementFiles
         partialScene = plan.partial
@@ -986,14 +1093,18 @@ class FilamentPlatformView(
         if (destroyed || !uiHelper.isReadyToRender || swapChain == null) return
         val dt = if (lastFrame == 0L) 0f else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceIn(0f, 0.1f)
         lastFrame = frameTimeNanos
+        flushDolly(dt)
         manipulator?.update(dt)
         val eye = DoubleArray(3)
         val target = DoubleArray(3)
         val up = DoubleArray(3)
         manipulator?.getLookAt(eye, target, up)
         if (manipulator != null) {
+            lastEye = eye
+            lastTarget = target
             camera.lookAt(eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2])
         }
+        if (sectionEnabled) syncSection(log = false)
         resourceLoader.asyncUpdateLoad()
         assetLoader.gc()
         populate()
@@ -1056,6 +1167,19 @@ class FilamentPlatformView(
             }
             if (instance == 0 || !show) continue
             val original = originals.getOrPut(entity) { rm.getMaterialInstanceAt(instance, 0) }
+            if (sectionActive && sectionBody != null) {
+                val proxy = entity in proxyEntities
+                val inward = !proxy && id in inwardIds
+                val painted = when {
+                    id == selected -> if (inward) sectionSelectedInward else sectionSelected
+                    xray -> if (inward) sectionGhostInward else sectionGhost
+                    proxy -> sectionStandIn
+                    inward -> sectionBodyInward
+                    else -> sectionBody
+                } ?: sectionBody!!
+                rm.setMaterialInstanceAt(instance, 0, painted)
+                continue
+            }
             val ghost = xray && id != selected && xrayInstance != null
             val standIn = id in standInIds && deferred.containsKey(id)
             if (ghost) {
@@ -1126,12 +1250,22 @@ class FilamentPlatformView(
         frameMax = bounds.copyOfRange(3, 6)
         val aspect = frameAspect()
         val solved = tighten(CameraFit.pose(bounds, cameraPreset, aspect), bounds)
+        lastEye = doubleArrayOf(solved.eyeX.toDouble(), solved.eyeY.toDouble(), solved.eyeZ.toDouble())
+        lastTarget = doubleArrayOf(
+            solved.targetX.toDouble(),
+            solved.targetY.toDouble(),
+            solved.targetZ.toDouble(),
+        )
         framedBox = bounds.copyOf()
         framedAspect = aspect
-        near = max(0.02, solved.radius / 4000.0)
+        baseNear = max(0.02, solved.radius / 4000.0)
+        near = baseNear
         far = max(solved.distance.toDouble() * 80.0, solved.radius * 80.0)
         if (far < 500.0) far = 500.0
         val zoom = max(solved.distance * 0.035f, 0.25f)
+        dollySpeed = zoom
+        dollyPending = 0f
+        framedRadius = solved.radius
         manipulator = Manipulator.Builder()
             .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
             .targetPosition(solved.targetX, solved.targetY, solved.targetZ)
@@ -1142,11 +1276,12 @@ class FilamentPlatformView(
             .fovDirection(Manipulator.Fov.VERTICAL)
             .farPlane(far.toFloat())
             .build(Manipulator.Mode.ORBIT)
-        gesture = GestureDetector(surfaceView, manipulator!!)
+        gesture = OrbitGestures(surfaceView, manipulator!!, ::noteZoom)
         framed = true
         applyViewViewport()
         updateProjection()
         val ndc = if (engineAlive) readNdc(bounds) else CameraFit.maxAbsNdc(bounds, solved, aspect)
+        if (sectionEnabled) syncSection(log = false)
         Log.i(
             TAG,
             "frame target=${solved.targetX},${solved.targetY},${solved.targetZ} " +
@@ -1308,12 +1443,42 @@ class FilamentPlatformView(
         camera.setProjection(45.0, frameAspect(), near, far, Camera.Fov.VERTICAL)
     }
 
+    private fun noteZoom(x: Int, y: Int, scrollDelta: Float) {
+        dollyX = x
+        dollyY = y
+        dollyPending += scrollDelta
+    }
+
+    /**
+     * Ease the queued pinch and wheel command. Far from the model the metres
+     * match an immediate `scroll`. Against the bounds, zoom-in is smaller.
+     */
+    private fun flushDolly(dt: Float) {
+        val manip = manipulator ?: return
+        if (dollyPending == 0f) return
+        val gap = Dolly.gapToBox(
+            lastEye[0].toFloat(),
+            lastEye[1].toFloat(),
+            lastEye[2].toFloat(),
+            frameMin[0],
+            frameMin[1],
+            frameMin[2],
+            frameMax[0],
+            frameMax[1],
+            frameMax[2],
+        )
+        val step = Dolly.step(dollyPending, dt, dollySpeed, gap, framedRadius)
+        dollyPending = step.pending
+        if (abs(step.scroll) < 1e-5f) return
+        manip.scroll(dollyX, dollyY, step.scroll)
+    }
+
     private fun onTouch(event: MotionEvent): Boolean {
         if (!engineAlive || destroyed) return true
         gesture?.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL && manipulator != null) {
             val wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            manipulator?.scroll(event.x.toInt(), event.y.toInt(), -wheel * 4f)
+            noteZoom(event.x.toInt(), event.y.toInt(), -wheel * Dolly.wheelScroll)
         }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -1350,26 +1515,50 @@ class FilamentPlatformView(
         }
         val px = coords[0]
         val py = coords[1]
+        val clip = if (sectionActive) liveClip else null
+        val bounds = if (clip != null) sectionBounds() else null
+        val projection = if (clip != null) camera.getProjectionMatrix(DoubleArray(16)) else null
+        val model = if (clip != null) camera.getModelMatrix(DoubleArray(16)) else null
         view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
-            val id = elementByEntity[result.renderable] ?: 0L
+            var id = elementByEntity[result.renderable] ?: 0L
+            val depth = result.depth
+            val frag = result.fragCoords
+            val fragX = if (frag.size >= 1) frag[0] else px.toFloat()
+            val fragY = if (frag.size >= 2) frag[1] else py.toFloat()
+            // fragCoords.z is 1 - depth: 0 at the near plane, 1 at infinity.
+            val fragZ = if (frag.size >= 3) frag[2] else 1f - depth
+            var world: FloatArray? = null
+            var rejected = false
+            if (id != 0L && clip != null && bounds != null && projection != null && model != null &&
+                SectionClip.usableDepth(depth)
+            ) {
+                world = SectionClip.unproject(projection, model, width, height, fragX, fragY, fragZ)
+                if (world != null && SectionClip.rejects(world[0], world[1], world[2], clip, bounds)) {
+                    rejected = true
+                    id = 0L
+                }
+            }
             val reason = when {
+                rejected -> "section"
                 id != 0L -> "hit"
                 result.renderable != 0 -> "unmapped"
                 else -> "miss"
             }
+            val worldText = world?.joinToString(",") ?: "none"
             Log.i(
                 TAG,
-                "pick $reason element=$id renderable=${result.renderable} " +
-                    "depth=${result.depth} px=$px py=$py",
+                "pick $reason element=$id renderable=${result.renderable} depth=$depth " +
+                    "fragZ=$fragZ px=$px py=$py world=$worldText",
             )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)
                 if (sceneArmed) pumpQueue()
             }
+            val picked = id
             mainHandler.post {
                 try {
-                    channel.invokeMethod("onPick", mapOf("elementId" to id))
+                    channel.invokeMethod("onPick", mapOf("elementId" to picked))
                 } catch (_: Exception) {
                 }
             }
@@ -1390,6 +1579,193 @@ class FilamentPlatformView(
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun loadSection() {
+        sectionMaterial = openMaterial("materials/section.filamat")
+        sectionGhostMaterial = openMaterial("materials/section_ghost.filamat")
+        val material = sectionMaterial
+        if (material == null) return
+        sectionBody = material.createInstance().also {
+            paintSection(it, SECTION_BODY, 0.78f, 1f)
+        }
+        sectionBodyInward = material.createInstance().also {
+            paintSection(it, SECTION_BODY, 0.78f, -1f)
+        }
+        sectionSelected = material.createInstance().also {
+            paintSection(it, HIGHLIGHT, 0.42f, 1f)
+        }
+        sectionSelectedInward = material.createInstance().also {
+            paintSection(it, HIGHLIGHT, 0.42f, -1f)
+        }
+        sectionStandIn = material.createInstance().also {
+            paintSection(it, STAND_IN, 0.5f, 1f)
+        }
+        sectionGhost = sectionGhostMaterial?.createInstance()?.also {
+            paintSection(it, SECTION_GHOST, 0.9f, 1f)
+        }
+        sectionGhostInward = sectionGhostMaterial?.createInstance()?.also {
+            paintSection(it, SECTION_GHOST, 0.9f, -1f)
+        }
+    }
+
+    private fun openMaterial(path: String): Material? {
+        return try {
+            val bytes = context.assets.open(path).use { it.readBytes() }
+            val buffer = ByteBuffer.allocateDirect(bytes.size)
+            buffer.put(bytes)
+            buffer.flip()
+            Material.Builder().payload(buffer, buffer.remaining()).build(engine)
+        } catch (error: Exception) {
+            Log.w(TAG, "section material $path: ${error.message}")
+            null
+        }
+    }
+
+    private fun paintSection(instance: MaterialInstance, color: FloatArray, roughness: Float, frontSign: Float) {
+        instance.setParameter("baseColor", color[0], color[1], color[2], color[3])
+        instance.setParameter("capColor", SECTION_CAP[0], SECTION_CAP[1], SECTION_CAP[2], SECTION_CAP[3])
+        instance.setParameter("roughness", roughness)
+        instance.setParameter("frontSign", frontSign)
+        instance.setParameter("clipPlane", 0f, 0f, 0f, 0f)
+        instance.setParameter("boxMin", 0f, 0f, 0f, 0f)
+        instance.setParameter("boxMax", 0f, 0f, 0f, 0f)
+    }
+
+    private fun eachSection(block: (MaterialInstance) -> Unit) {
+        sectionBody?.let(block)
+        sectionBodyInward?.let(block)
+        sectionSelected?.let(block)
+        sectionSelectedInward?.let(block)
+        sectionGhost?.let(block)
+        sectionGhostInward?.let(block)
+        sectionStandIn?.let(block)
+    }
+
+    private fun syncSection(log: Boolean) {
+        val want = sectionEnabled && sectionBody != null
+        if (want) {
+            updateSectionUniforms()
+        } else {
+            liveClip = null
+            sentClip = null
+        }
+        updateNear()
+        if (want != sectionActive) {
+            sectionActive = want
+            applyVisibility()
+        }
+        if (log) logSection()
+    }
+
+    private fun updateSectionUniforms() {
+        if (sectionBody == null) return
+        val bounds = sectionBounds()
+        val clip = SectionClip.solve(
+            axis = sectionAxis,
+            flip = sectionFlip,
+            offset = sectionOffset,
+            bounds = bounds,
+            eyeX = lastEye[0].toFloat(),
+            eyeY = lastEye[1].toFloat(),
+            eyeZ = lastEye[2].toFloat(),
+            targetX = lastTarget[0].toFloat(),
+            targetY = lastTarget[1].toFloat(),
+            targetZ = lastTarget[2].toFloat(),
+            boxEnabled = sectionBox,
+            boxInset = sectionInset,
+        )
+        liveClip = clip
+        val previous = sentClip
+        if (previous == null || !previous.matches(clip)) {
+            sentClip = clip
+            eachSection { pushClip(it, clip) }
+        }
+        publishSection(clip.reach, clip.boxSpan, clip.at, force = false)
+    }
+
+    private fun pushClip(instance: MaterialInstance, clip: SectionClip.Clip) {
+        try {
+            instance.setParameter("clipPlane", clip.nx, clip.ny, clip.nz, clip.d)
+            instance.setParameter(
+                "boxMin",
+                clip.minX,
+                clip.minY,
+                clip.minZ,
+                if (clip.box) 1f else 0f,
+            )
+            instance.setParameter("boxMax", clip.maxX, clip.maxY, clip.maxZ, 0f)
+        } catch (error: Exception) {
+            Log.w(TAG, "section uniform: ${error.message}")
+        }
+    }
+
+    private fun updateNear() {
+        val eyeDistance = SectionClip.distance(
+            lastEye[0], lastEye[1], lastEye[2],
+            lastTarget[0], lastTarget[1], lastTarget[2],
+        )
+        val next = if (sectionEnabled) {
+            SectionClip.nearDistance(baseNear, eyeDistance, sectionNearAmount)
+        } else {
+            baseNear
+        }
+        if (kotlin.math.abs(next - near) <= 1e-4) return
+        near = next
+        updateProjection()
+    }
+
+    private fun sectionBounds(): FloatArray {
+        return allBox()
+            ?: floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
+    }
+
+    private fun logSection() {
+        val clip = liveClip
+        if (!sectionEnabled || clip == null) {
+            Log.i(TAG, "section enabled=false")
+            publishSection(0f, 0f, 0f, force = true)
+            return
+        }
+        Log.i(
+            TAG,
+            "section enabled=true axis=$sectionAxis flip=$sectionFlip " +
+                "offset=$sectionOffset metres=${clip.metres} at=${clip.at} near=$sectionNearAmount " +
+                "box=$sectionBox inset=$sectionInset " +
+                "plane=${clip.nx},${clip.ny},${clip.nz},${clip.d} " +
+                "centre=${clip.cx},${clip.cy},${clip.cz} " +
+                "boxMin=${clip.minX},${clip.minY},${clip.minZ} " +
+                "boxMax=${clip.maxX},${clip.maxY},${clip.maxZ}",
+        )
+        publishSection(clip.reach, clip.boxSpan, clip.at, force = true)
+    }
+
+    private fun publishSection(half: Float, box: Float, at: Float, force: Boolean) {
+        if (!force && !publishedAt.isNaN() &&
+            kotlin.math.abs(publishedAt - at) < 0.05f &&
+            kotlin.math.abs(publishedHalf - half) < 0.05f
+        ) {
+            return
+        }
+        publishedAt = at
+        publishedHalf = half
+        mainHandler.post {
+            try {
+                channel.invokeMethod(
+                    "onSection",
+                    mapOf(
+                        "half" to half.toDouble(),
+                        "box" to box.toDouble(),
+                        "at" to at.toDouble(),
+                    ),
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun finite(value: Double, fallback: Double): Double {
+        return if (value.isNaN() || value.isInfinite()) fallback else value
     }
 
     private fun setStatus(value: Map<String, Any?>) {
@@ -1416,16 +1792,17 @@ class FilamentPlatformView(
         bufferQueue.clear()
         previewAssets.clear()
         val rm = engine.renderableManager
-        if (xrayInstance != null) {
-            for ((entity, original) in originals) {
-                val inst = rm.getInstance(entity)
-                if (inst == 0) continue
-                try {
-                    rm.setMaterialInstanceAt(inst, 0, original)
-                } catch (_: Exception) {
-                }
+        for ((entity, original) in originals) {
+            val inst = rm.getInstance(entity)
+            if (inst == 0) continue
+            try {
+                rm.setMaterialInstanceAt(inst, 0, original)
+            } catch (_: Exception) {
             }
         }
+        sectionActive = false
+        liveClip = null
+        sentClip = null
         for ((entity, tint) in tinted) {
             val inst = rm.getInstance(entity)
             val original = originals[entity]
@@ -1468,6 +1845,7 @@ class FilamentPlatformView(
         records.clear()
         deferred.clear()
         standInIds.clear()
+        inwardIds.clear()
         replaced.clear()
         framedBox = null
         framedAspect = 0.0
@@ -1499,6 +1877,22 @@ class FilamentPlatformView(
             xrayMaterial?.let { engine.destroyMaterial(it) }
         }
         xrayMaterial = null
+        step("section-instances") {
+            eachSection { engine.destroyMaterialInstance(it) }
+        }
+        sectionBody = null
+        sectionBodyInward = null
+        sectionSelected = null
+        sectionSelectedInward = null
+        sectionGhost = null
+        sectionGhostInward = null
+        sectionStandIn = null
+        step("section-material") {
+            sectionMaterial?.let { engine.destroyMaterial(it) }
+            sectionGhostMaterial?.let { engine.destroyMaterial(it) }
+        }
+        sectionMaterial = null
+        sectionGhostMaterial = null
         step("lights") {
             scene.indirectLight = null
             scene.skybox = null
@@ -1590,6 +1984,9 @@ class FilamentPlatformView(
         private const val TAG = "FbvFilament"
         private val HIGHLIGHT = floatArrayOf(1f, 0.45f, 0.08f, 1f)
         private val STAND_IN = floatArrayOf(0.95f, 0.45f, 0.12f, 1f)
+        private val SECTION_BODY = floatArrayOf(0.73f, 0.75f, 0.78f, 1f)
+        private val SECTION_CAP = floatArrayOf(0.93f, 0.38f, 0.14f, 1f)
+        private val SECTION_GHOST = floatArrayOf(0.62f, 0.76f, 0.90f, 0.28f)
 
         /** Column-major (x, y, z) -> (x, z, -y). */
         private val Z_TO_Y = floatArrayOf(
@@ -1625,4 +2022,5 @@ private data class LoadPlan(
     val proxy: ProxyGlb?,
     val preview: ProxyGlb?,
     val standIn: Set<Long>,
+    val inward: Set<Long>,
 )

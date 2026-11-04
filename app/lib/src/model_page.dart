@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import 'appearance.dart';
+import 'filament_channel.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
@@ -32,6 +34,9 @@ class _ModelPageState extends State<ModelPage>
   final Set<int> _hidden = {};
   final Set<int> _isolated = {};
   bool _xray = false;
+  SectionView _section = const SectionView();
+  double? _sectionBoxSpan;
+  double? _sectionAt;
   int _renderRevision = 0;
   bool _opening = false;
   bool _closing = false;
@@ -46,7 +51,6 @@ class _ModelPageState extends State<ModelPage>
   void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
   final _portraitKey = GlobalKey();
-  final _renderBarKey = GlobalKey();
   final _sheet = DraggableScrollableController();
   double _fitBottomInset = 0;
   int _insetTries = 0;
@@ -175,7 +179,11 @@ class _ModelPageState extends State<ModelPage>
   void _choose(int? id) {
     setState(() {
       _selectedId = id;
-      if (id != null && _standIns.contains(id)) _xray = true;
+      if (id == null) {
+        _xray = false;
+      } else if (_standIns.contains(id)) {
+        _xray = true;
+      }
       _renderRevision++;
     });
   }
@@ -208,8 +216,7 @@ class _ModelPageState extends State<ModelPage>
 
   void _syncFitInset() {
     final stack = _portraitKey.currentContext?.size?.height;
-    final bar = _renderBarKey.currentContext?.size?.height ?? 0;
-    if (stack == null || stack <= bar + 1) {
+    if (stack == null || stack <= 1) {
       // The sheet is not laid out yet. Try the next frames, then stop.
       if (_portraitKey.currentContext != null && _insetTries < 8) {
         _insetTries++;
@@ -219,8 +226,8 @@ class _ModelPageState extends State<ModelPage>
     }
     _insetTries = 0;
     final sheet = _sheet.isAttached ? _sheet.size : 0.22;
-    final overlap = (sheet * stack).clamp(0.0, stack - bar);
-    _pushFitInset(overlap / (stack - bar));
+    final overlap = (sheet * stack).clamp(0.0, stack);
+    _pushFitInset(overlap / stack);
   }
 
   void _pushFitInset(double inset) {
@@ -251,6 +258,7 @@ class _ModelPageState extends State<ModelPage>
       _hidden.clear();
       _isolated.clear();
       _xray = false;
+      _section = const SectionView();
       _renderRevision++;
     });
   }
@@ -277,6 +285,14 @@ class _ModelPageState extends State<ModelPage>
     });
   }
 
+  void _toggleSection() {
+    setState(() => _section = _section.copyWith(enabled: !_section.enabled));
+  }
+
+  void _setSection(SectionView next) {
+    setState(() => _section = next);
+  }
+
   ElementInfo? get _selected {
     for (final element in _elements) {
       if (element.id == _selectedId) return element;
@@ -284,57 +300,105 @@ class _ModelPageState extends State<ModelPage>
     return null;
   }
 
-  Widget _renderBar(S strings) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 0,
-        children: [
-          TextButton(
-            onPressed: () => _viewport.currentState?.fitAll(),
-            child: Text(strings.fitAll),
+  Widget _modelTools(S strings) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(20),
+        color: scheme.surface.withValues(alpha: 0.92),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _toolButton(
+                key: const ValueKey('section-toggle'),
+                tooltip: strings.section,
+                icon: Icons.content_cut,
+                selected: _section.enabled,
+                onPressed: _toggleSection,
+              ),
+              _toolButton(
+                tooltip: strings.xray,
+                icon: Icons.blur_on,
+                selected: _xray,
+                onPressed: _selectedId == null ? null : _toggleXray,
+              ),
+              _toolButton(
+                tooltip: strings.isolate,
+                icon: Icons.filter_center_focus,
+                selected: _isolated.isNotEmpty,
+                onPressed: _selectedId == null ? null : _isolateSelected,
+              ),
+              _toolButton(
+                tooltip: strings.cameraHome,
+                icon: Icons.restart_alt,
+                onPressed: () => _viewport.currentState?.setCamera('iso'),
+              ),
+              PopupMenuButton<String>(
+                tooltip: strings.actions,
+                padding: EdgeInsets.zero,
+                iconSize: 20,
+                onSelected: _onToolAction,
+                itemBuilder: (context) => [
+                  PopupMenuItem(value: 'fit', child: Text(strings.fitAll)),
+                  PopupMenuItem(value: 'fit-selected', child: Text(strings.fitSelected)),
+                  PopupMenuItem(value: 'hide', child: Text(strings.hide)),
+                  PopupMenuItem(value: 'show', child: Text(strings.showAll)),
+                  PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
+                  PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
+                  PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
+                  PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
+                  PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
+                  PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
+                ],
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.fitSelected(),
-            child: Text(strings.fitSelected),
-          ),
-          TextButton(onPressed: _hideSelected, child: Text(strings.hide)),
-          TextButton(onPressed: _showAll, child: Text(strings.showAll)),
-          TextButton(onPressed: _isolateSelected, child: Text(strings.isolate)),
-          Tooltip(
-            message: strings.xrayHint,
-            child: TextButton(
-              onPressed: _toggleXray,
-              child: Text(strings.xray),
-            ),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('front'),
-            child: Text(strings.viewFront),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('back'),
-            child: Text(strings.viewBack),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('left'),
-            child: Text(strings.viewLeft),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('right'),
-            child: Text(strings.viewRight),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('top'),
-            child: Text(strings.viewTop),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('bottom'),
-            child: Text(strings.viewBottom),
-          ),
-        ],
+        ),
       ),
+    );
+  }
+
+  void _onToolAction(String value) {
+    final view = _viewport.currentState;
+    if (value == 'fit') {
+      view?.fitAll();
+    } else if (value == 'fit-selected') {
+      view?.fitSelected();
+    } else if (value == 'hide') {
+      _hideSelected();
+    } else if (value == 'show') {
+      _showAll();
+    } else {
+      view?.setCamera(value);
+    }
+  }
+
+  Widget _toolButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    bool selected = false,
+    Key? key,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      isSelected: selected,
+      visualDensity: VisualDensity.compact,
+      style: IconButton.styleFrom(
+        backgroundColor: selected ? scheme.primary : null,
+        foregroundColor: selected ? scheme.onPrimary : scheme.onSurface,
+        minimumSize: const Size(36, 36),
+        padding: const EdgeInsets.all(6),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: onPressed,
+      icon: Icon(icon, size: 20),
     );
   }
 
@@ -485,7 +549,7 @@ class _ModelPageState extends State<ModelPage>
         final wide = constraints.maxWidth >= 1100;
         final landscape = !wide && constraints.maxWidth > constraints.maxHeight;
         final selected = _selected;
-        final viewport = _viewportOf(selected);
+        final viewport = _sectionFrame(_viewportOf(selected));
         if (wide) {
           _scheduleFitInset(0);
           return _wideWorkspace(context, viewport, selected);
@@ -513,14 +577,7 @@ class _ModelPageState extends State<ModelPage>
           child: Row(
             children: [
               SizedBox(width: 320, child: _tree(context)),
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(child: viewport),
-                    _renderBar(strings),
-                  ],
-                ),
-              ),
+              Expanded(child: _tooledViewport(viewport, strings)),
               SizedBox(width: 340, child: _properties(context, selected)),
             ],
           ),
@@ -539,12 +596,8 @@ class _ModelPageState extends State<ModelPage>
     return Stack(
       key: _portraitKey,
       children: [
-        Column(
-          children: [
-            KeyedSubtree(key: _renderBarKey, child: _renderBar(strings)),
-            Expanded(child: viewport),
-          ],
-        ),
+        Positioned.fill(child: viewport),
+        Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
         DraggableScrollableSheet(
           controller: _sheet,
           initialChildSize: 0.22,
@@ -581,8 +634,7 @@ class _ModelPageState extends State<ModelPage>
             .toDouble();
         return Row(
           children: [
-            _cameraRail(strings),
-            Expanded(child: viewport),
+            Expanded(child: _tooledViewport(viewport, strings)),
             SizedBox(width: side, child: _properties(context, selected)),
           ],
         );
@@ -590,69 +642,12 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _cameraRail(S strings) {
-    final style = IconButton.styleFrom(
-      padding: EdgeInsets.zero,
-      minimumSize: const Size(40, 40),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    return SizedBox(
-      width: 48,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        children: [
-          IconButton(
-            tooltip: strings.fitAll,
-            style: style,
-            onPressed: () => _viewport.currentState?.fitAll(),
-            icon: const Icon(Icons.fit_screen),
-          ),
-          IconButton(
-            tooltip: strings.fitSelected,
-            style: style,
-            onPressed: () => _viewport.currentState?.fitSelected(),
-            icon: const Icon(Icons.center_focus_strong),
-          ),
-          IconButton(
-            tooltip: strings.hide,
-            style: style,
-            onPressed: _hideSelected,
-            icon: const Icon(Icons.visibility_off_outlined),
-          ),
-          IconButton(
-            tooltip: strings.showAll,
-            style: style,
-            onPressed: _showAll,
-            icon: const Icon(Icons.visibility_outlined),
-          ),
-          IconButton(
-            tooltip: strings.isolate,
-            style: style,
-            onPressed: _isolateSelected,
-            icon: const Icon(Icons.filter_center_focus),
-          ),
-          IconButton(
-            tooltip: strings.xrayHint,
-            style: style,
-            onPressed: _toggleXray,
-            icon: const Icon(Icons.blur_on),
-          ),
-          PopupMenuButton<String>(
-            tooltip: strings.cameraViews,
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.videocam_outlined),
-            onSelected: (preset) => _viewport.currentState?.setCamera(preset),
-            itemBuilder: (context) => [
-              PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
-              PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
-              PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
-              PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
-              PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
-              PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
-            ],
-          ),
-        ],
-      ),
+  Widget _tooledViewport(Widget viewport, S strings) {
+    return Stack(
+      children: [
+        Positioned.fill(child: viewport),
+        Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
+      ],
     );
   }
 
@@ -708,6 +703,255 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  Widget _sectionFrame(Widget viewport) {
+    if (!_section.enabled) return viewport;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final portrait = constraints.maxHeight > constraints.maxWidth &&
+            constraints.maxWidth < 1100;
+        final sideRail = !portrait &&
+            constraints.maxWidth > constraints.maxHeight &&
+            constraints.maxHeight < 560;
+        final lift = portrait ? _fitBottomInset * constraints.maxHeight : 0.0;
+        return Stack(
+          children: [
+            Positioned.fill(child: viewport),
+            if (sideRail)
+              Positioned(
+                top: 48,
+                right: 8,
+                width: 208,
+                child: _sectionPanel(widget.strings, stacked: true),
+              )
+            else
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8 + lift,
+                child: _sectionPanel(widget.strings),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _sectionPanel(S strings, {bool stacked = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final at = _sectionAt;
+    final offsetLabel = at == null
+        ? strings.sectionOffset
+        : strings.sectionOffsetAt(_axisLabel(strings, _section.axis), at);
+    final axisChips = Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final axis in const ['x', 'y', 'z', 'view'])
+          ChoiceChip(
+            label: Text(_axisLabel(strings, axis), maxLines: 1),
+            selected: _section.axis == axis,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
+          ),
+      ],
+    );
+    final flipButton = IconButton(
+      key: const ValueKey('section-flip'),
+      tooltip: strings.sectionFlip,
+      visualDensity: VisualDensity.compact,
+      isSelected: _section.flip,
+      color: _section.flip ? scheme.primary : null,
+      onPressed: () => _setSection(_section.copyWith(flip: !_section.flip)),
+      icon: const Icon(Icons.swap_horiz),
+    );
+    final moreButton = Builder(
+      builder: (buttonContext) {
+        return TextButton(
+          key: const ValueKey('section-more'),
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          onPressed: () => _showSectionMore(buttonContext),
+          child: Text(strings.sectionMore),
+        );
+      },
+    );
+    return Material(
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.96),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (stacked)
+              axisChips
+            else
+              Row(
+                children: [
+                  Expanded(child: axisChips),
+                  flipButton,
+                  moreButton,
+                ],
+              ),
+            if (stacked)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [flipButton, moreButton],
+              ),
+            _sectionSlider(
+              offsetLabel,
+              _section.offset,
+              -1,
+              1,
+              const ValueKey('section-offset'),
+              (value) => _setSection(_section.copyWith(offset: value)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSectionMore(BuildContext buttonContext) async {
+    final strings = widget.strings;
+    final button = buttonContext.findRenderObject() as RenderBox?;
+    if (button == null || !button.attached || !mounted) return;
+    final origin = button.localToGlobal(Offset.zero);
+    final screen = MediaQuery.sizeOf(context);
+    final width = math.min(320.0, screen.width - 16);
+    final left = origin.dx.clamp(8.0, math.max(8.0, screen.width - width - 8)).toDouble();
+    final bottom = math.max(8.0, screen.height - origin.dy + 8);
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: strings.sectionMore,
+      barrierColor: const Color(0x33000000),
+      transitionDuration: const Duration(milliseconds: 1),
+      pageBuilder: (dialogContext, _, _) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return Stack(
+              children: [
+                Positioned(
+                  left: left,
+                  width: width,
+                  bottom: bottom,
+                  child: _sectionMoreCard(strings, setLocal),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _sectionMoreCard(S strings, void Function(VoidCallback) setLocal) {
+    final scheme = Theme.of(context).colorScheme;
+    final boxSpan = _sectionBoxSpan;
+    final keep = (1 - _section.inset).clamp(0.02, 1).toDouble();
+    final boxLabel = boxSpan == null
+        ? strings.sectionInset
+        : strings.sectionBoxMetres(keep * boxSpan);
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _sectionSlider(
+              strings.sectionNear,
+              _section.near,
+              0,
+              1,
+              const ValueKey('section-near'),
+              (value) {
+                _setSection(_section.copyWith(near: value));
+                setLocal(() {});
+              },
+            ),
+            Row(
+              children: [
+                Text(strings.sectionBox),
+                const Spacer(),
+                Switch(
+                  value: _section.box,
+                  onChanged: (value) {
+                    _setSection(
+                      _section.copyWith(box: value, inset: value ? _section.inset : 0),
+                    );
+                    setLocal(() {});
+                  },
+                ),
+              ],
+            ),
+            if (_section.box)
+              _sectionSlider(
+                boxLabel,
+                keep,
+                0.02,
+                1,
+                const ValueKey('section-inset'),
+                (value) {
+                  _setSection(_section.copyWith(inset: 1 - value));
+                  setLocal(() {});
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _axisLabel(S strings, String axis) {
+    return switch (axis) {
+      'view' => strings.sectionView,
+      'y' => 'Y',
+      'z' => 'Z',
+      _ => 'X',
+    };
+  }
+
+  Widget _sectionSlider(
+    String label,
+    double value,
+    double min,
+    double max,
+    Key key,
+    ValueChanged<double> onChanged,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 8,
+            activeTrackColor: Theme.of(context).colorScheme.primary,
+            inactiveTrackColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.28),
+            thumbColor: Theme.of(context).colorScheme.primary,
+            overlayColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
+          ),
+          child: Slider(
+            key: key,
+            value: value.clamp(min, max).toDouble(),
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _viewportOf(ElementInfo? selected) {
     return FilamentViewport(
       key: _viewport,
@@ -719,11 +963,19 @@ class _ModelPageState extends State<ModelPage>
       hiddenIds: _hidden,
       isolatedIds: _isolated,
       xray: _xray,
+      section: _section,
       renderRevision: _renderRevision,
       frameToken: _frameToken,
       bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
+      onSectionSpan: (_, box, at) {
+        if (!mounted) return;
+        setState(() {
+          _sectionBoxSpan = box;
+          _sectionAt = at;
+        });
+      },
     );
   }
 
