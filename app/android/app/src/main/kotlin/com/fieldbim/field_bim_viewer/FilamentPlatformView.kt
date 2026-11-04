@@ -31,7 +31,6 @@ import com.google.android.filament.gltfio.FilamentAsset
 import com.google.android.filament.gltfio.Gltfio
 import com.google.android.filament.gltfio.ResourceLoader
 import com.google.android.filament.gltfio.UbershaderProvider
-import com.google.android.filament.utils.GestureDetector
 import com.google.android.filament.utils.Manipulator
 import com.google.android.filament.utils.Utils
 import io.flutter.plugin.common.BinaryMessenger
@@ -49,6 +48,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -119,7 +119,12 @@ class FilamentPlatformView(
     private var sectionStandIn: MaterialInstance? = null
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
-    private var gesture: GestureDetector? = null
+    private var gesture: OrbitGestures? = null
+    private var dollyPending = 0f
+    private var dollySpeed = 0.25f
+    private var dollyX = 0
+    private var dollyY = 0
+    private var framedRadius = 1f
 
     private val assets = ArrayList<FilamentAsset>()
     private val proxyAssets = HashSet<FilamentAsset>()
@@ -623,6 +628,8 @@ class FilamentPlatformView(
         isolated = HashSet()
         xray = false
         manipulator = null
+        gesture = null
+        dollyPending = 0f
         if (wasSection) Log.i(TAG, "section enabled=false")
     }
 
@@ -1086,6 +1093,7 @@ class FilamentPlatformView(
         if (destroyed || !uiHelper.isReadyToRender || swapChain == null) return
         val dt = if (lastFrame == 0L) 0f else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceIn(0f, 0.1f)
         lastFrame = frameTimeNanos
+        flushDolly(dt)
         manipulator?.update(dt)
         val eye = DoubleArray(3)
         val target = DoubleArray(3)
@@ -1255,6 +1263,9 @@ class FilamentPlatformView(
         far = max(solved.distance.toDouble() * 80.0, solved.radius * 80.0)
         if (far < 500.0) far = 500.0
         val zoom = max(solved.distance * 0.035f, 0.25f)
+        dollySpeed = zoom
+        dollyPending = 0f
+        framedRadius = solved.radius
         manipulator = Manipulator.Builder()
             .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
             .targetPosition(solved.targetX, solved.targetY, solved.targetZ)
@@ -1265,7 +1276,7 @@ class FilamentPlatformView(
             .fovDirection(Manipulator.Fov.VERTICAL)
             .farPlane(far.toFloat())
             .build(Manipulator.Mode.ORBIT)
-        gesture = GestureDetector(surfaceView, manipulator!!)
+        gesture = OrbitGestures(surfaceView, manipulator!!, ::noteZoom)
         framed = true
         applyViewViewport()
         updateProjection()
@@ -1432,12 +1443,42 @@ class FilamentPlatformView(
         camera.setProjection(45.0, frameAspect(), near, far, Camera.Fov.VERTICAL)
     }
 
+    private fun noteZoom(x: Int, y: Int, scrollDelta: Float) {
+        dollyX = x
+        dollyY = y
+        dollyPending += scrollDelta
+    }
+
+    /**
+     * Ease the queued pinch and wheel command. Far from the model the metres
+     * match an immediate `scroll`. Against the bounds, zoom-in is smaller.
+     */
+    private fun flushDolly(dt: Float) {
+        val manip = manipulator ?: return
+        if (dollyPending == 0f) return
+        val gap = Dolly.gapToBox(
+            lastEye[0].toFloat(),
+            lastEye[1].toFloat(),
+            lastEye[2].toFloat(),
+            frameMin[0],
+            frameMin[1],
+            frameMin[2],
+            frameMax[0],
+            frameMax[1],
+            frameMax[2],
+        )
+        val step = Dolly.step(dollyPending, dt, dollySpeed, gap, framedRadius)
+        dollyPending = step.pending
+        if (abs(step.scroll) < 1e-5f) return
+        manip.scroll(dollyX, dollyY, step.scroll)
+    }
+
     private fun onTouch(event: MotionEvent): Boolean {
         if (!engineAlive || destroyed) return true
         gesture?.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL && manipulator != null) {
             val wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            manipulator?.scroll(event.x.toInt(), event.y.toInt(), -wheel * 4f)
+            noteZoom(event.x.toInt(), event.y.toInt(), -wheel * Dolly.wheelScroll)
         }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

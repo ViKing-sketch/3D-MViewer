@@ -721,7 +721,7 @@ class _ModelPageState extends State<ModelPage>
                 top: 48,
                 right: 8,
                 width: 208,
-                child: _sectionPanel(widget.strings),
+                child: _sectionPanel(widget.strings, stacked: true),
               )
             else
               Positioned(
@@ -736,12 +736,46 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _sectionPanel(S strings) {
+  Widget _sectionPanel(S strings, {bool stacked = false}) {
     final scheme = Theme.of(context).colorScheme;
     final at = _sectionAt;
     final offsetLabel = at == null
         ? strings.sectionOffset
         : strings.sectionOffsetAt(_axisLabel(strings, _section.axis), at);
+    final axisChips = Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final axis in const ['x', 'y', 'z', 'view'])
+          ChoiceChip(
+            label: Text(_axisLabel(strings, axis), maxLines: 1),
+            selected: _section.axis == axis,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
+          ),
+      ],
+    );
+    final flipButton = IconButton(
+      key: const ValueKey('section-flip'),
+      tooltip: strings.sectionFlip,
+      visualDensity: VisualDensity.compact,
+      isSelected: _section.flip,
+      color: _section.flip ? scheme.primary : null,
+      onPressed: () => _setSection(_section.copyWith(flip: !_section.flip)),
+      icon: const Icon(Icons.swap_horiz),
+    );
+    final moreButton = Builder(
+      builder: (buttonContext) {
+        return TextButton(
+          key: const ValueKey('section-more'),
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          onPressed: () => _showSectionMore(buttonContext),
+          child: Text(strings.sectionMore),
+        );
+      },
+    );
     return Material(
       elevation: 3,
       borderRadius: BorderRadius.circular(12),
@@ -752,46 +786,21 @@ class _ModelPageState extends State<ModelPage>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      for (final axis in const ['x', 'y', 'z', 'view'])
-                        ChoiceChip(
-                          label: Text(_axisLabel(strings, axis)),
-                          selected: _section.axis == axis,
-                          visualDensity: VisualDensity.compact,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
-                        ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  key: const ValueKey('section-flip'),
-                  tooltip: strings.sectionFlip,
-                  visualDensity: VisualDensity.compact,
-                  isSelected: _section.flip,
-                  color: _section.flip ? scheme.primary : null,
-                  onPressed: () => _setSection(_section.copyWith(flip: !_section.flip)),
-                  icon: const Icon(Icons.swap_horiz),
-                ),
-                Builder(
-                  builder: (buttonContext) {
-                    return TextButton(
-                      key: const ValueKey('section-more'),
-                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                      onPressed: () => _showSectionMore(buttonContext),
-                      child: Text(strings.sectionMore),
-                    );
-                  },
-                ),
-              ],
-            ),
+            if (stacked)
+              axisChips
+            else
+              Row(
+                children: [
+                  Expanded(child: axisChips),
+                  flipButton,
+                  moreButton,
+                ],
+              ),
+            if (stacked)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [flipButton, moreButton],
+              ),
             _sectionSlider(
               offsetLabel,
               _section.offset,

@@ -5,6 +5,7 @@ import 'package:field_bim_viewer/src/model.dart';
 import 'package:field_bim_viewer/src/model_page.dart';
 import 'package:field_bim_viewer/src/strings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -330,6 +331,11 @@ void main() {
     final width = tester.getSize(slider).width;
     expect(width, lessThan(220));
     expect(tester.getTopLeft(slider).dx, greaterThan(240));
+    final label = tester.renderObject<RenderParagraph>(find.text('По взгляду'));
+    expect(
+      label.size.width + 1,
+      greaterThanOrEqualTo(label.getMaxIntrinsicWidth(double.infinity)),
+    );
     expect(tester.takeException(), isNull);
   });
 }
