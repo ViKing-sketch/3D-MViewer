@@ -1485,12 +1485,14 @@ class FilamentPlatformView(
             val frag = result.fragCoords
             val fragX = if (frag.size >= 1) frag[0] else px.toFloat()
             val fragY = if (frag.size >= 2) frag[1] else py.toFloat()
+            // fragCoords.z is 1 - depth: 0 at the near plane, 1 at infinity.
+            val fragZ = if (frag.size >= 3) frag[2] else 1f - depth
             var world: FloatArray? = null
             var rejected = false
             if (id != 0L && clip != null && bounds != null && projection != null && model != null &&
                 SectionClip.usableDepth(depth)
             ) {
-                world = SectionClip.unproject(projection, model, width, height, fragX, fragY, depth)
+                world = SectionClip.unproject(projection, model, width, height, fragX, fragY, fragZ)
                 if (world != null && SectionClip.rejects(world[0], world[1], world[2], clip, bounds)) {
                     rejected = true
                     id = 0L
@@ -1506,7 +1508,7 @@ class FilamentPlatformView(
             Log.i(
                 TAG,
                 "pick $reason element=$id renderable=${result.renderable} depth=$depth " +
-                    "px=$px py=$py world=$worldText",
+                    "fragZ=$fragZ px=$px py=$py world=$worldText",
             )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)

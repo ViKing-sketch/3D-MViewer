@@ -179,7 +179,11 @@ class _ModelPageState extends State<ModelPage>
   void _choose(int? id) {
     setState(() {
       _selectedId = id;
-      if (id != null && _standIns.contains(id)) _xray = true;
+      if (id == null) {
+        _xray = false;
+      } else if (_standIns.contains(id)) {
+        _xray = true;
+      }
       _renderRevision++;
     });
   }
@@ -320,13 +324,13 @@ class _ModelPageState extends State<ModelPage>
                 tooltip: strings.xray,
                 icon: Icons.blur_on,
                 selected: _xray,
-                onPressed: _toggleXray,
+                onPressed: _selectedId == null ? null : _toggleXray,
               ),
               _toolButton(
                 tooltip: strings.isolate,
                 icon: Icons.filter_center_focus,
                 selected: _isolated.isNotEmpty,
-                onPressed: _isolateSelected,
+                onPressed: _selectedId == null ? null : _isolateSelected,
               ),
               _toolButton(
                 tooltip: strings.cameraHome,
@@ -376,7 +380,7 @@ class _ModelPageState extends State<ModelPage>
   Widget _toolButton({
     required String tooltip,
     required IconData icon,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
     bool selected = false,
     Key? key,
   }) {
@@ -705,16 +709,27 @@ class _ModelPageState extends State<ModelPage>
       builder: (context, constraints) {
         final portrait = constraints.maxHeight > constraints.maxWidth &&
             constraints.maxWidth < 1100;
+        final sideRail = !portrait &&
+            constraints.maxWidth > constraints.maxHeight &&
+            constraints.maxHeight < 560;
         final lift = portrait ? _fitBottomInset * constraints.maxHeight : 0.0;
         return Stack(
           children: [
             Positioned.fill(child: viewport),
-            Positioned(
-              left: 8,
-              right: 8,
-              bottom: 8 + lift,
-              child: _sectionPanel(widget.strings),
-            ),
+            if (sideRail)
+              Positioned(
+                top: 48,
+                right: 8,
+                width: 208,
+                child: _sectionPanel(widget.strings),
+              )
+            else
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8 + lift,
+                child: _sectionPanel(widget.strings),
+              ),
           ],
         );
       },

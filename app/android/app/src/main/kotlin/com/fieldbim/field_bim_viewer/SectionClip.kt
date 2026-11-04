@@ -178,10 +178,13 @@ object SectionClip {
     }
 
     /**
-     * Filament pick unproject. [fragX] and [fragY] are viewport-relative.
-     * [clipZ] is [usableDepth] space: the pick buffer stores shader ndc z,
-     * which `getProjectionMatrix` already maps to 1 at the near plane and 0
-     * at infinity. Do not run that value through `* 2 - 1`.
+     * Filament pick unproject. [fragX] and [fragY] are viewport-relative pixels.
+     * [clipZ] is `PickingQueryResult.fragCoords.z`: 0 at the near plane and 1 at
+     * infinity, which is `1 - depth`. The pick buffer stores inverted-DX shader
+     * z (1 at the near plane). `Camera.getProjectionMatrix` does not: the public
+     * getter returns the OpenGL user matrix, far at infinity, with ndc z in
+     * [-1, 1]. Mapping [clipZ] with `* 2 - 1` is that conversion. Passing
+     * `result.depth` straight through parks the hit on the camera.
      * Returns API world xyz, or null when the matrix cannot be inverted.
      */
     fun unproject(
@@ -197,7 +200,7 @@ object SectionClip {
         val inv = invert(projection) ?: return null
         val cx = fragX / width * 2.0 - 1.0
         val cy = fragY / height * 2.0 - 1.0
-        val cz = clipZ.toDouble()
+        val cz = clipZ.toDouble() * 2.0 - 1.0
         val view = mul(inv, doubleArrayOf(cx, cy, cz, 1.0))
         if (abs(view[3]) < 1e-8) return null
         val invW = 1.0 / view[3]

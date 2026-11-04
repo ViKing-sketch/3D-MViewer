@@ -190,28 +190,40 @@ class SectionClipTest {
     }
 
     @Test
-    fun unprojectAppliesTheCameraModel() {
+    fun unprojectReversesTheOpenGlUserProjection() {
+        // Public Camera.getProjectionMatrix is this matrix: 90° vertical,
+        // aspect 1, near 1, far at infinity. NDC z is -1 at the near plane.
+        val projection = doubleArrayOf(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, -1.0, -1.0,
+            0.0, 0.0, -2.0, 0.0,
+        )
         val identity = DoubleArray(16) { if (it % 5 == 0) 1.0 else 0.0 }
-        // Depth 0 is ndc z 0. Mapping it with fragZ * 2 - 1 would yield -1.
-        val origin = SectionClip.unproject(identity, identity, 100, 50, 50f, 25f, 0f)
-        assertEquals(0f, origin!![0], 1e-4f)
-        assertEquals(0f, origin[1], 1e-4f)
-        assertEquals(0f, origin[2], 1e-4f)
-        val mid = SectionClip.unproject(identity, identity, 100, 50, 0f, 0f, 0.5f)
-        assertEquals(-1f, mid!![0], 1e-4f)
-        assertEquals(-1f, mid[1], 1e-4f)
-        assertEquals(0.5f, mid[2], 1e-4f)
+        // View point (0, 0, -8). Inverted-DX depth is near/distance = 0.125.
+        // fragCoords.z is 1 - depth = 0.875. Feeding depth in as clip z lands
+        // on the camera; frag z must come back to the surface.
+        val center = SectionClip.unproject(projection, identity, 100, 80, 50f, 40f, 0.875f)
+        assertEquals(0f, center!![0], 1e-3f)
+        assertEquals(0f, center[1], 1e-3f)
+        assertEquals(-8f, center[2], 1e-3f)
+        val offset = SectionClip.unproject(projection, identity, 100, 80, 62.5f, 35f, 0.875f)
+        assertEquals(2f, offset!![0], 1e-3f)
+        assertEquals(-1f, offset[1], 1e-3f)
+        assertEquals(-8f, offset[2], 1e-3f)
         val moved = doubleArrayOf(
             1.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, 1.0, 0.0,
             3.0, 4.0, 5.0, 1.0,
         )
-        val world = SectionClip.unproject(identity, moved, 100, 50, 50f, 25f, 0f)
-        assertEquals(3f, world!![0], 1e-4f)
-        assertEquals(4f, world[1], 1e-4f)
-        assertEquals(5f, world[2], 1e-4f)
-        assertNull(SectionClip.unproject(identity, identity, 0, 10, 0f, 0f, 0f))
+        val world = SectionClip.unproject(projection, moved, 100, 80, 50f, 40f, 0.875f)
+        assertEquals(3f, world!![0], 1e-3f)
+        assertEquals(4f, world[1], 1e-3f)
+        assertEquals(-3f, world[2], 1e-3f)
+        val parked = SectionClip.unproject(projection, identity, 100, 80, 50f, 40f, 0.125f)
+        assertTrue(parked!![2] > -2f)
+        assertNull(SectionClip.unproject(projection, identity, 0, 10, 0f, 0f, 0.875f))
         assertNull(SectionClip.invert(DoubleArray(16)))
         assertTrue(SectionClip.usableDepth(0f))
         assertTrue(SectionClip.usableDepth(1f))

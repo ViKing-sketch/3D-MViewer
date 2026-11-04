@@ -11,6 +11,15 @@ import 'package:path/path.dart' as p;
 String _repoFile(String relative) =>
     p.normalize(p.join(Directory.current.path, '..', relative));
 
+IconButton _tool(WidgetTester tester, String tooltip) {
+  return tester.widget<IconButton>(
+    find.ancestor(
+      of: find.byTooltip(tooltip),
+      matching: find.byType(IconButton),
+    ),
+  );
+}
+
 Future<void> pumpFor(WidgetTester tester, Finder finder) async {
   // Zip open copies on a background isolate. pump() only advances the fake
   // clock, so give that isolate real time and then rebuild.
@@ -182,8 +191,10 @@ void main() {
     expect(find.text('Выберите элемент'), findsOneWidget);
     expect(find.byTooltip('Меню'), findsOneWidget);
     expect(find.byTooltip('Рентген'), findsOneWidget);
+    expect(_tool(tester, 'Рентген').onPressed, isNull);
     expect(find.byTooltip('Срез'), findsOneWidget);
     expect(find.byTooltip('Изолировать'), findsOneWidget);
+    expect(_tool(tester, 'Изолировать').onPressed, isNull);
     expect(find.byTooltip('Камера по умолчанию'), findsOneWidget);
     await tester.tap(find.byTooltip('Действия'));
     await tester.pumpAndSettle();
@@ -216,6 +227,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Свойства'), findsOneWidget);
     expect(find.text('Wall W-1'), findsWidgets);
+    expect(_tool(tester, 'Рентген').onPressed, isNotNull);
+    expect(_tool(tester, 'Изолировать').onPressed, isNotNull);
     expect(find.text('IfcWall'), findsOneWidget);
     await tester.drag(find.text('Свойства'), const Offset(0, -420));
     await tester.pump();
@@ -297,6 +310,26 @@ void main() {
     await tester.tap(find.byType(Switch));
     await tester.pump();
     expect(find.byKey(const ValueKey('section-inset')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('short landscape parks the section strip on the side', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 390);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('section-toggle')));
+    await tester.pump();
+    final slider = find.byKey(const ValueKey('section-offset'));
+    expect(slider, findsOneWidget);
+    final width = tester.getSize(slider).width;
+    expect(width, lessThan(220));
+    expect(tester.getTopLeft(slider).dx, greaterThan(240));
     expect(tester.takeException(), isNull);
   });
 }
