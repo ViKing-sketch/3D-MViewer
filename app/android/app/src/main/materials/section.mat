@@ -1,0 +1,42 @@
+// Section clip for Filament 1.77.3. Rebuild with:
+//   matc -p mobile -a opengl -a vulkan -l 1 -o ../assets/materials/section.filamat section.mat
+//
+// Keep a fragment where dot(world, clipPlane.xyz) <= clipPlane.w.
+// boxMin.w > 0.5 also discards outside the axis-aligned box (boxMin.xyz, boxMax.xyz).
+// Back faces are the solid cut colour. The same test is in SectionClip.kt.
+material {
+    name : SectionClip,
+    shadingModel : unlit,
+    culling : none,
+    parameters : [
+        { type : float4, name : baseColor },
+        { type : float4, name : capColor },
+        { type : float4, name : clipPlane },
+        { type : float4, name : boxMin },
+        { type : float4, name : boxMax }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec3 world = getWorldPosition();
+        vec4 plane = materialParams.clipPlane;
+        if (dot(world, plane.xyz) > plane.w) {
+            discard;
+        }
+        if (materialParams.boxMin.w > 0.5) {
+            vec3 lo = materialParams.boxMin.xyz;
+            vec3 hi = materialParams.boxMax.xyz;
+            if (world.x < lo.x || world.y < lo.y || world.z < lo.z ||
+                    world.x > hi.x || world.y > hi.y || world.z > hi.z) {
+                discard;
+            }
+        }
+        if (gl_FrontFacing) {
+            material.baseColor = materialParams.baseColor;
+        } else {
+            material.baseColor = materialParams.capColor;
+        }
+    }
+}

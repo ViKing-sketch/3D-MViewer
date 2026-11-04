@@ -63,7 +63,7 @@ class FilamentViewFactory(private val messenger: BinaryMessenger) :
  * Native Filament view for channel `fbv/filament`.
  *
  * Orbit, pan and zoom stay in this view. Flutter sends selection, hide,
- * isolate, X-ray and the framed cameras. Package meshes are Z-up; each asset
+ * isolate, X-ray, the section clip and the framed cameras. Package meshes are Z-up; each asset
  * root is turned to Filament Y-up. `mesh/lod0.glb` loads when it fits the
  * source-byte budget. A larger lod0 becomes element GLBs (smallest first)
  * plus box proxies, and selecting a deferred element streams its file.
@@ -108,6 +108,9 @@ class FilamentPlatformView(
     private var engineAlive = false
     private var xrayMaterial: Material? = null
     private var xrayInstance: MaterialInstance? = null
+    private var sectionMaterial: Material? = null
+    private var sectionBody: MaterialInstance? = null
+    private var sectionSelected: MaterialInstance? = null
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
     private var gesture: GestureDetector? = null
@@ -136,13 +139,26 @@ class FilamentPlatformView(
     private var isolated = HashSet<Long>()
     private var selected = 0L
     private var xray = false
+    private var sectionEnabled = false
+    private var sectionNearAmount = 0.0
+    private var sectionAxis = "x"
+    private var sectionFlip = false
+    private var sectionOffset = 0f
+    private var sectionBox = false
+    private var sectionInset = 0.25f
+    private var sectionActive = false
+    private var liveClip: SectionClip.Clip? = null
+    private var sentClip: SectionClip.Clip? = null
     private var viewportW = 1
     private var viewportH = 1
     private var fitBottomInset = 0.0
     private val cameraView = DoubleArray(16)
     private val cameraProjection = DoubleArray(16)
     private var near = 0.05
+    private var baseNear = 0.05
     private var far = 2000.0
+    private var lastEye = doubleArrayOf(0.0, 0.0, 5.0)
+    private var lastTarget = doubleArrayOf(0.0, 0.0, 0.0)
     private var frameMin = floatArrayOf(-1f, -1f, -1f)
     private var frameMax = floatArrayOf(1f, 1f, 1f)
     private var preset = "iso"
@@ -265,6 +281,7 @@ class FilamentPlatformView(
         skybox = Skybox.Builder().color(0.83f, 0.87f, 0.91f, 1f).build(engine)
         scene.skybox = skybox
         xrayInstance = loadXray()
+        loadSection()
     }
 
     override fun dispose() {
@@ -342,6 +359,27 @@ class FilamentPlatformView(
                     if (destroyed) return@post
                     preset = next
                     frame(allBox(), preset)
+                }
+                result.success(null)
+            }
+            "setSection" -> {
+                val enabled = call.argument<Boolean>("enabled") == true
+                val nearAmount = finite(call.argument<Number>("near")?.toDouble() ?: 0.0, 0.0)
+                val axis = call.argument<String>("axis") ?: "x"
+                val flip = call.argument<Boolean>("flip") == true
+                val offset = finite(call.argument<Number>("offset")?.toDouble() ?: 0.0, 0.0).toFloat()
+                val box = call.argument<Boolean>("box") == true
+                val inset = finite(call.argument<Number>("inset")?.toDouble() ?: 0.25, 0.25).toFloat()
+                renderHandler.post {
+                    if (destroyed) return@post
+                    sectionEnabled = enabled
+                    sectionNearAmount = nearAmount.coerceIn(0.0, 1.0)
+                    sectionAxis = axis
+                    sectionFlip = flip
+                    sectionOffset = offset.coerceIn(-1f, 1f)
+                    sectionBox = box
+                    sectionInset = inset.coerceIn(0f, 1f)
+                    syncSection(log = true)
                 }
                 result.success(null)
             }
@@ -992,8 +1030,11 @@ class FilamentPlatformView(
         val up = DoubleArray(3)
         manipulator?.getLookAt(eye, target, up)
         if (manipulator != null) {
+            lastEye = eye
+            lastTarget = target
             camera.lookAt(eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2])
         }
+        if (sectionEnabled) syncSection(log = false)
         resourceLoader.asyncUpdateLoad()
         assetLoader.gc()
         populate()
@@ -1056,6 +1097,11 @@ class FilamentPlatformView(
             }
             if (instance == 0 || !show) continue
             val original = originals.getOrPut(entity) { rm.getMaterialInstanceAt(instance, 0) }
+            if (sectionActive && sectionBody != null) {
+                val painted = if (id == selected) sectionSelected ?: sectionBody!! else sectionBody!!
+                rm.setMaterialInstanceAt(instance, 0, painted)
+                continue
+            }
             val ghost = xray && id != selected && xrayInstance != null
             val standIn = id in standInIds && deferred.containsKey(id)
             if (ghost) {
@@ -1126,9 +1172,16 @@ class FilamentPlatformView(
         frameMax = bounds.copyOfRange(3, 6)
         val aspect = frameAspect()
         val solved = tighten(CameraFit.pose(bounds, cameraPreset, aspect), bounds)
+        lastEye = doubleArrayOf(solved.eyeX.toDouble(), solved.eyeY.toDouble(), solved.eyeZ.toDouble())
+        lastTarget = doubleArrayOf(
+            solved.targetX.toDouble(),
+            solved.targetY.toDouble(),
+            solved.targetZ.toDouble(),
+        )
         framedBox = bounds.copyOf()
         framedAspect = aspect
-        near = max(0.02, solved.radius / 4000.0)
+        baseNear = max(0.02, solved.radius / 4000.0)
+        near = baseNear
         far = max(solved.distance.toDouble() * 80.0, solved.radius * 80.0)
         if (far < 500.0) far = 500.0
         val zoom = max(solved.distance * 0.035f, 0.25f)
@@ -1147,6 +1200,7 @@ class FilamentPlatformView(
         applyViewViewport()
         updateProjection()
         val ndc = if (engineAlive) readNdc(bounds) else CameraFit.maxAbsNdc(bounds, solved, aspect)
+        if (sectionEnabled) syncSection(log = false)
         Log.i(
             TAG,
             "frame target=${solved.targetX},${solved.targetY},${solved.targetZ} " +
@@ -1334,42 +1388,37 @@ class FilamentPlatformView(
 
     private fun pick(x: Float, y: Float) {
         val vp = view.viewport
-        val ready = vp.width > 1 && vp.height > 1
-        val left = if (ready) vp.left else 0
-        val bottom = if (ready) vp.bottom else 0
-        val width = if (ready) vp.width else viewportW
-        val height = if (ready) vp.height else viewportH
-        val coords = PickCoords.resolve(left, bottom, width, height, viewportH, x, y)
-        if (coords == null) {
-            val reason = if (width <= 1 || height <= 1) "unready" else "outside"
-            Log.i(
-                TAG,
-                "pick miss reason=$reason x=$x y=$y viewport=$left,$bottom ${width}x$height",
-            )
-            return
-        }
-        val px = coords[0]
-        val py = coords[1]
+        val width = if (vp.width > 1) vp.width else viewportW
+        val height = if (vp.height > 1) vp.height else viewportH
+        if (width <= 1 || height <= 1) return
+        val px = (vp.left + x.toInt()).coerceIn(vp.left, vp.left + width - 1)
+        val py = (vp.bottom + height - y.toInt()).coerceIn(vp.bottom, vp.bottom + height - 1)
+        val clip = if (sectionActive) liveClip else null
+        val bounds = if (clip != null) sectionBounds() else null
+        val projection = if (clip != null) camera.getProjectionMatrix(DoubleArray(16)) else null
+        val model = if (clip != null) camera.getModelMatrix(DoubleArray(16)) else null
         view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
-            val id = elementByEntity[result.renderable] ?: 0L
-            val reason = when {
-                id != 0L -> "hit"
-                result.renderable != 0 -> "unmapped"
-                else -> "miss"
+            var id = elementByEntity[result.renderable] ?: 0L
+            if (id != 0L && clip != null && bounds != null && projection != null && model != null) {
+                val frag = result.fragCoords
+                val world = if (frag.size >= 3) {
+                    SectionClip.unproject(projection, model, width, height, frag[0], frag[1], frag[2])
+                } else {
+                    null
+                }
+                if (world != null && SectionClip.rejects(world[0], world[1], world[2], clip, bounds)) {
+                    id = 0L
+                }
             }
-            Log.i(
-                TAG,
-                "pick $reason element=$id renderable=${result.renderable} " +
-                    "depth=${result.depth} px=$px py=$py",
-            )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)
                 if (sceneArmed) pumpQueue()
             }
+            val picked = id
             mainHandler.post {
                 try {
-                    channel.invokeMethod("onPick", mapOf("elementId" to id))
+                    channel.invokeMethod("onPick", mapOf("elementId" to picked))
                 } catch (_: Exception) {
                 }
             }
@@ -1390,6 +1439,121 @@ class FilamentPlatformView(
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun loadSection() {
+        try {
+            val bytes = context.assets.open("materials/section.filamat").use { it.readBytes() }
+            val buffer = ByteBuffer.allocateDirect(bytes.size)
+            buffer.put(bytes)
+            buffer.flip()
+            val material = Material.Builder().payload(buffer, buffer.remaining()).build(engine)
+            sectionMaterial = material
+            sectionBody = material.createInstance().also { paintSection(it, false) }
+            sectionSelected = material.createInstance().also { paintSection(it, true) }
+        } catch (error: Exception) {
+            Log.w(TAG, "section material: ${error.message}")
+        }
+    }
+
+    private fun paintSection(instance: MaterialInstance, selected: Boolean) {
+        val color = if (selected) HIGHLIGHT else SECTION_BODY
+        instance.setParameter("baseColor", color[0], color[1], color[2], color[3])
+        instance.setParameter("capColor", SECTION_CAP[0], SECTION_CAP[1], SECTION_CAP[2], SECTION_CAP[3])
+        instance.setParameter("clipPlane", 0f, 0f, 0f, 0f)
+        instance.setParameter("boxMin", 0f, 0f, 0f, 0f)
+        instance.setParameter("boxMax", 0f, 0f, 0f, 0f)
+    }
+
+    private fun syncSection(log: Boolean) {
+        val want = sectionEnabled && sectionBody != null
+        if (want) {
+            updateSectionUniforms()
+            if (log) logSection()
+        } else {
+            liveClip = null
+            sentClip = null
+        }
+        updateNear()
+        if (want != sectionActive) {
+            sectionActive = want
+            applyVisibility()
+        }
+    }
+
+    private fun updateSectionUniforms() {
+        val body = sectionBody ?: return
+        val bounds = sectionBounds()
+        val clip = SectionClip.solve(
+            axis = sectionAxis,
+            flip = sectionFlip,
+            offset = sectionOffset,
+            bounds = bounds,
+            eyeX = lastEye[0].toFloat(),
+            eyeY = lastEye[1].toFloat(),
+            eyeZ = lastEye[2].toFloat(),
+            targetX = lastTarget[0].toFloat(),
+            targetY = lastTarget[1].toFloat(),
+            targetZ = lastTarget[2].toFloat(),
+            boxEnabled = sectionBox,
+            boxInset = sectionInset,
+        )
+        liveClip = clip
+        val previous = sentClip
+        if (previous != null && previous.matches(clip)) return
+        sentClip = clip
+        pushClip(body, clip)
+        sectionSelected?.let { pushClip(it, clip) }
+    }
+
+    private fun pushClip(instance: MaterialInstance, clip: SectionClip.Clip) {
+        try {
+            instance.setParameter("clipPlane", clip.nx, clip.ny, clip.nz, clip.d)
+            instance.setParameter(
+                "boxMin",
+                clip.minX,
+                clip.minY,
+                clip.minZ,
+                if (clip.box) 1f else 0f,
+            )
+            instance.setParameter("boxMax", clip.maxX, clip.maxY, clip.maxZ, 0f)
+        } catch (error: Exception) {
+            Log.w(TAG, "section uniform: ${error.message}")
+        }
+    }
+
+    private fun updateNear() {
+        val eyeDistance = SectionClip.distance(
+            lastEye[0], lastEye[1], lastEye[2],
+            lastTarget[0], lastTarget[1], lastTarget[2],
+        )
+        val next = if (sectionEnabled) {
+            SectionClip.nearDistance(baseNear, eyeDistance, sectionNearAmount)
+        } else {
+            baseNear
+        }
+        if (kotlin.math.abs(next - near) <= 1e-4) return
+        near = next
+        updateProjection()
+    }
+
+    private fun sectionBounds(): FloatArray {
+        return allBox()
+            ?: floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
+    }
+
+    private fun logSection() {
+        val clip = liveClip
+        Log.i(
+            TAG,
+            "section enabled=$sectionEnabled axis=$sectionAxis flip=$sectionFlip " +
+                "offset=$sectionOffset near=$sectionNearAmount box=$sectionBox " +
+                "plane=${clip?.nx},${clip?.ny},${clip?.nz},${clip?.d}",
+        )
+    }
+
+    private fun finite(value: Double, fallback: Double): Double {
+        return if (value.isNaN() || value.isInfinite()) fallback else value
     }
 
     private fun setStatus(value: Map<String, Any?>) {
@@ -1416,16 +1580,17 @@ class FilamentPlatformView(
         bufferQueue.clear()
         previewAssets.clear()
         val rm = engine.renderableManager
-        if (xrayInstance != null) {
-            for ((entity, original) in originals) {
-                val inst = rm.getInstance(entity)
-                if (inst == 0) continue
-                try {
-                    rm.setMaterialInstanceAt(inst, 0, original)
-                } catch (_: Exception) {
-                }
+        for ((entity, original) in originals) {
+            val inst = rm.getInstance(entity)
+            if (inst == 0) continue
+            try {
+                rm.setMaterialInstanceAt(inst, 0, original)
+            } catch (_: Exception) {
             }
         }
+        sectionActive = false
+        liveClip = null
+        sentClip = null
         for ((entity, tint) in tinted) {
             val inst = rm.getInstance(entity)
             val original = originals[entity]
@@ -1499,6 +1664,16 @@ class FilamentPlatformView(
             xrayMaterial?.let { engine.destroyMaterial(it) }
         }
         xrayMaterial = null
+        step("section-instances") {
+            sectionBody?.let { engine.destroyMaterialInstance(it) }
+            sectionSelected?.let { engine.destroyMaterialInstance(it) }
+        }
+        sectionBody = null
+        sectionSelected = null
+        step("section-material") {
+            sectionMaterial?.let { engine.destroyMaterial(it) }
+        }
+        sectionMaterial = null
         step("lights") {
             scene.indirectLight = null
             scene.skybox = null
@@ -1590,6 +1765,8 @@ class FilamentPlatformView(
         private const val TAG = "FbvFilament"
         private val HIGHLIGHT = floatArrayOf(1f, 0.45f, 0.08f, 1f)
         private val STAND_IN = floatArrayOf(0.95f, 0.45f, 0.12f, 1f)
+        private val SECTION_BODY = floatArrayOf(0.75f, 0.77f, 0.80f, 1f)
+        private val SECTION_CAP = floatArrayOf(0.92f, 0.40f, 0.16f, 1f)
 
         /** Column-major (x, y, z) -> (x, z, -y). */
         private val Z_TO_Y = floatArrayOf(

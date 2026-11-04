@@ -259,4 +259,37 @@ void main() {
     expect(find.text('Wall W-1'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  test('section hint explains the clip in both languages', () {
+    expect(const S(true).section, 'Срез');
+    expect(const S(true).sectionHint, contains('не зависит от зума'));
+    expect(const S(false).section, 'Section');
+    expect(const S(false).sectionHint, contains('zoom'));
+  });
+
+  testWidgets('section mode shows the clipping hint', (tester) async {
+    // Landscape under 1100px uses the icon rail, which is short enough that
+    // the section control is built. The wide text bar lazily skips it.
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    final toggle = find.byKey(const ValueKey('section-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.textContaining('не зависит от зума'), findsOneWidget);
+    expect(find.byKey(const ValueKey('section-near')), findsOneWidget);
+    expect(find.byKey(const ValueKey('section-offset')), findsOneWidget);
+    expect(find.text('По взгляду'), findsOneWidget);
+    expect(find.text('Коробка'), findsOneWidget);
+    await tester.ensureVisible(find.text('Коробка'));
+    await tester.tap(find.text('Коробка'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('section-inset')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

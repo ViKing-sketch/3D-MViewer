@@ -25,6 +25,7 @@ class FilamentViewport extends StatefulWidget {
     this.hiddenIds = const {},
     this.isolatedIds = const {},
     this.xray = false,
+    this.section = const SectionView(),
     this.renderRevision = 0,
     this.frameToken = 0,
     this.bottomInset = 0,
@@ -41,6 +42,7 @@ class FilamentViewport extends StatefulWidget {
   final Set<int> hiddenIds;
   final Set<int> isolatedIds;
   final bool xray;
+  final SectionView section;
   final int renderRevision;
   final int frameToken;
 
@@ -84,6 +86,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     if ((oldWidget.bottomInset - widget.bottomInset).abs() > 0.001) {
       _commands?.setFitInset(widget.bottomInset);
     }
+    if (oldWidget.section != widget.section) _pushSection();
     if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
       _commands?.load(widget.rootPath!);
     }
@@ -113,6 +116,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     await commands.setFitInset(widget.bottomInset);
     if (widget.rootPath != null) await commands.load(widget.rootPath!);
     await _pushState();
+    await _pushSection();
   }
 
   void _applyStatus(Map<dynamic, dynamic> raw) {
@@ -160,6 +164,12 @@ class FilamentViewportState extends State<FilamentViewport> {
       xray: widget.xray,
       frame: frame,
     );
+  }
+
+  Future<void> _pushSection() async {
+    final commands = _commands;
+    if (commands == null) return;
+    await commands.setSection(widget.section);
   }
 
   @override

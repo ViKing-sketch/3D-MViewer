@@ -63,6 +63,19 @@ class S {
       ? 'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.'
       : 'Other elements turn translucent. The selection stays solid.';
   String get menu => russian ? 'Меню' : 'Menu';
+  String get section => russian ? 'Срез' : 'Section';
+  String get sectionHint => russian
+      ? 'Ближняя плоскость режет у фокуса и едет с камерой. Плоскость X, Y (вверх), Z или по взгляду отсекает в материале и не зависит от зума. Обратные грани — цветом среза, касание не выбирает отсечённое.'
+      : 'The near plane cuts at the focus and follows the camera. An X, Y (up), Z, or view plane clips in the material and stays put when you zoom. Back faces show the cut colour, and taps ignore clipped geometry.';
+  String get sectionNear => russian ? 'Ближняя' : 'Near';
+  String get sectionOffset => russian ? 'Сдвиг' : 'Offset';
+  String get sectionFlip => russian ? 'Сторона' : 'Side';
+  String get sectionBox => russian ? 'Коробка' : 'Box';
+  String get sectionBoxHint => russian
+      ? 'Оставляет только объём внутри коробки'
+      : 'Keeps only what is inside the box';
+  String get sectionInset => russian ? 'Размер коробки' : 'Box size';
+  String get sectionView => russian ? 'По взгляду' : 'View';
   String get viewFront => russian ? 'Спереди' : 'Front';
   String get viewBack => russian ? 'Сзади' : 'Back';
   String get viewLeft => russian ? 'Слева' : 'Left';

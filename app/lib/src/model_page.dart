@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'appearance.dart';
+import 'filament_channel.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
@@ -32,6 +33,7 @@ class _ModelPageState extends State<ModelPage>
   final Set<int> _hidden = {};
   final Set<int> _isolated = {};
   bool _xray = false;
+  SectionView _section = const SectionView();
   int _renderRevision = 0;
   bool _opening = false;
   bool _closing = false;
@@ -251,6 +253,7 @@ class _ModelPageState extends State<ModelPage>
       _hidden.clear();
       _isolated.clear();
       _xray = false;
+      _section = const SectionView();
       _renderRevision++;
     });
   }
@@ -275,6 +278,14 @@ class _ModelPageState extends State<ModelPage>
       _xray = !_xray;
       _renderRevision++;
     });
+  }
+
+  void _toggleSection() {
+    setState(() => _section = _section.copyWith(enabled: !_section.enabled));
+  }
+
+  void _setSection(SectionView next) {
+    setState(() => _section = next);
   }
 
   ElementInfo? get _selected {
@@ -307,6 +318,19 @@ class _ModelPageState extends State<ModelPage>
             child: TextButton(
               onPressed: _toggleXray,
               child: Text(strings.xray),
+            ),
+          ),
+          Tooltip(
+            message: strings.sectionHint,
+            child: TextButton(
+              key: const ValueKey('section-toggle'),
+              onPressed: _toggleSection,
+              style: _section.enabled
+                  ? TextButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.primary,
+                    )
+                  : null,
+              child: Text(strings.section),
             ),
           ),
           TextButton(
@@ -485,7 +509,7 @@ class _ModelPageState extends State<ModelPage>
         final wide = constraints.maxWidth >= 1100;
         final landscape = !wide && constraints.maxWidth > constraints.maxHeight;
         final selected = _selected;
-        final viewport = _viewportOf(selected);
+        final viewport = _sectionFrame(_viewportOf(selected));
         if (wide) {
           _scheduleFitInset(0);
           return _wideWorkspace(context, viewport, selected);
@@ -637,6 +661,19 @@ class _ModelPageState extends State<ModelPage>
             onPressed: _toggleXray,
             icon: const Icon(Icons.blur_on),
           ),
+          IconButton(
+            key: const ValueKey('section-toggle'),
+            tooltip: strings.sectionHint,
+            style: _section.enabled
+                ? style.copyWith(
+                    foregroundColor: WidgetStatePropertyAll(
+                      Theme.of(context).colorScheme.primary,
+                    ),
+                  )
+                : style,
+            onPressed: _toggleSection,
+            icon: const Icon(Icons.content_cut),
+          ),
           PopupMenuButton<String>(
             tooltip: strings.cameraViews,
             padding: EdgeInsets.zero,
@@ -708,6 +745,122 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  Widget _sectionFrame(Widget viewport) {
+    if (!_section.enabled) return viewport;
+    final height = MediaQuery.sizeOf(context).height;
+    final cap = height * 0.38 < 280 ? height * 0.38 : 280.0;
+    return Column(
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: cap),
+          child: _sectionPanel(widget.strings),
+        ),
+        Expanded(child: viewport),
+      ],
+    );
+  }
+
+  Widget _sectionPanel(S strings) {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(strings.sectionHint, style: Theme.of(context).textTheme.bodySmall),
+            _sectionSlider(
+              strings.sectionNear,
+              _section.near,
+              0,
+              1,
+              const ValueKey('section-near'),
+              (value) => _setSection(_section.copyWith(near: value)),
+            ),
+            Wrap(
+              spacing: 6,
+              children: [
+                for (final axis in const ['x', 'y', 'z', 'view'])
+                  ChoiceChip(
+                    label: Text(_axisLabel(strings, axis)),
+                    selected: _section.axis == axis,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
+                  ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilterChip(
+                label: Text(strings.sectionFlip),
+                selected: _section.flip,
+                visualDensity: VisualDensity.compact,
+                onSelected: (value) => _setSection(_section.copyWith(flip: value)),
+              ),
+            ),
+            _sectionSlider(
+              strings.sectionOffset,
+              _section.offset,
+              -1,
+              1,
+              const ValueKey('section-offset'),
+              (value) => _setSection(_section.copyWith(offset: value)),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(strings.sectionBox),
+              subtitle: Text(strings.sectionBoxHint),
+              value: _section.box,
+              onChanged: (value) => _setSection(_section.copyWith(box: value)),
+            ),
+            if (_section.box)
+              _sectionSlider(
+                strings.sectionInset,
+                _section.inset,
+                0,
+                1,
+                const ValueKey('section-inset'),
+                (value) => _setSection(_section.copyWith(inset: value)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _axisLabel(S strings, String axis) {
+    return switch (axis) {
+      'view' => strings.sectionView,
+      'y' => 'Y',
+      'z' => 'Z',
+      _ => 'X',
+    };
+  }
+
+  Widget _sectionSlider(
+    String label,
+    double value,
+    double min,
+    double max,
+    Key key,
+    ValueChanged<double> onChanged,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        Slider(
+          key: key,
+          value: value.clamp(min, max).toDouble(),
+          min: min,
+          max: max,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
   Widget _viewportOf(ElementInfo? selected) {
     return FilamentViewport(
       key: _viewport,
@@ -719,6 +872,7 @@ class _ModelPageState extends State<ModelPage>
       hiddenIds: _hidden,
       isolatedIds: _isolated,
       xray: _xray,
+      section: _section,
       renderRevision: _renderRevision,
       frameToken: _frameToken,
       bottomInset: _fitBottomInset,
