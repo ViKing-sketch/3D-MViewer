@@ -32,6 +32,7 @@ class FilamentViewport extends StatefulWidget {
     this.onPick,
     this.onStatus,
     this.onStandIns,
+    this.onSectionSpan,
   });
 
   final S strings;
@@ -51,6 +52,7 @@ class FilamentViewport extends StatefulWidget {
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
   final ValueChanged<Set<int>>? onStandIns;
+  final void Function(double half, double box)? onSectionSpan;
 
   @override
   State<FilamentViewport> createState() => FilamentViewportState();
@@ -105,6 +107,15 @@ class FilamentViewportState extends State<FilamentViewport> {
       } else if (call.method == 'onStatus') {
         final args = call.arguments;
         if (args is Map) _applyStatus(args);
+      } else if (call.method == 'onSection') {
+        final args = call.arguments;
+        if (args is Map) {
+          final half = args['half'];
+          final box = args['box'];
+          if (half is num && box is num) {
+            widget.onSectionSpan?.call(half.toDouble(), box.toDouble());
+          }
+        }
       }
       return null;
     });

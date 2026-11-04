@@ -1,0 +1,74 @@
+// Translucent section material used while X-ray is on. Same clip as section.mat.
+//   matc -p mobile -a opengl -a vulkan -l 1 -o ../assets/materials/section_ghost.filamat section_ghost.mat
+material {
+    name : SectionGhost,
+    shadingModel : lit,
+    blending : transparent,
+    depthWrite : false,
+    culling : none,
+    doubleSided : true,
+    postLightingBlending : transparent,
+    parameters : [
+        { type : float4, name : baseColor, precision : high },
+        { type : float4, name : capColor, precision : high },
+        { type : float4, name : clipPlane, precision : high },
+        { type : float4, name : boxMin, precision : high },
+        { type : float4, name : boxMax, precision : high },
+        { type : float, name : roughness }
+    ],
+    variables : [
+        meshPos
+    ],
+    requires : [
+        tangents
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.meshPos.xyz = getPosition().xyz;
+    }
+}
+
+fragment {
+    bool sectionOut(vec3 p, vec4 plane) {
+        if (dot(p, plane.xyz) > plane.w) {
+            return true;
+        }
+        if (materialParams.boxMin.w <= 0.5) {
+            return false;
+        }
+        vec3 lo = materialParams.boxMin.xyz;
+        vec3 hi = materialParams.boxMax.xyz;
+        return p.x < lo.x || p.y < lo.y || p.z < lo.z ||
+                p.x > hi.x || p.y > hi.y || p.z > hi.z;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 plane = materialParams.clipPlane;
+        vec3 world = getUserWorldPosition();
+        vec3 mesh = variable_meshPos.xyz;
+        vec3 lifted = vec3(mesh.x, mesh.z, -mesh.y);
+        if (sectionOut(world, plane) && sectionOut(lifted, plane)) {
+            discard;
+        }
+        vec3 geometric = getWorldGeometricNormalVector();
+        if (!gl_FrontFacing) {
+            geometric = -geometric;
+        }
+        bool facesCamera = dot(geometric, getWorldViewVector()) > 0.0;
+        vec4 tint = materialParams.baseColor;
+        vec3 cap = materialParams.capColor.rgb;
+        material.roughness = materialParams.roughness;
+        material.metallic = 0.0;
+        material.reflectance = 0.35;
+        if (facesCamera) {
+            material.baseColor = vec4(tint.rgb * tint.a, tint.a);
+            material.postLightingColor = vec4(0.0);
+        } else {
+            material.baseColor = vec4(cap, 1.0);
+            material.postLightingColor = vec4(cap, 1.0);
+        }
+    }
+}

@@ -34,6 +34,9 @@ class _ModelPageState extends State<ModelPage>
   final Set<int> _isolated = {};
   bool _xray = false;
   SectionView _section = const SectionView();
+  bool _sectionMore = false;
+  double? _sectionHalf;
+  double? _sectionBoxSpan;
   int _renderRevision = 0;
   bool _opening = false;
   bool _closing = false;
@@ -302,6 +305,7 @@ class _ModelPageState extends State<ModelPage>
         spacing: 4,
         runSpacing: 0,
         children: [
+          _sectionButton(strings),
           TextButton(
             onPressed: () => _viewport.currentState?.fitAll(),
             child: Text(strings.fitAll),
@@ -318,19 +322,6 @@ class _ModelPageState extends State<ModelPage>
             child: TextButton(
               onPressed: _toggleXray,
               child: Text(strings.xray),
-            ),
-          ),
-          Tooltip(
-            message: strings.sectionHint,
-            child: TextButton(
-              key: const ValueKey('section-toggle'),
-              onPressed: _toggleSection,
-              style: _section.enabled
-                  ? TextButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.primary,
-                    )
-                  : null,
-              child: Text(strings.section),
             ),
           ),
           TextButton(
@@ -625,6 +616,7 @@ class _ModelPageState extends State<ModelPage>
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 4),
         children: [
+          _sectionIcon(strings, style),
           IconButton(
             tooltip: strings.fitAll,
             style: style,
@@ -660,19 +652,6 @@ class _ModelPageState extends State<ModelPage>
             style: style,
             onPressed: _toggleXray,
             icon: const Icon(Icons.blur_on),
-          ),
-          IconButton(
-            key: const ValueKey('section-toggle'),
-            tooltip: strings.sectionHint,
-            style: _section.enabled
-                ? style.copyWith(
-                    foregroundColor: WidgetStatePropertyAll(
-                      Theme.of(context).colorScheme.primary,
-                    ),
-                  )
-                : style,
-            onPressed: _toggleSection,
-            icon: const Icon(Icons.content_cut),
           ),
           PopupMenuButton<String>(
             tooltip: strings.cameraViews,
@@ -745,84 +724,158 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  Widget _sectionButton(S strings) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: strings.sectionHint,
+      child: FilledButton.tonal(
+        key: const ValueKey('section-toggle'),
+        onPressed: _toggleSection,
+        style: FilledButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          backgroundColor: _section.enabled ? scheme.primary : scheme.primaryContainer,
+          foregroundColor: _section.enabled ? scheme.onPrimary : scheme.onPrimaryContainer,
+        ),
+        child: Text(strings.section),
+      ),
+    );
+  }
+
+  Widget _sectionIcon(S strings, ButtonStyle style) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      key: const ValueKey('section-toggle'),
+      tooltip: strings.sectionHint,
+      style: style.copyWith(
+        backgroundColor: WidgetStatePropertyAll(
+          _section.enabled ? scheme.primary : scheme.primaryContainer,
+        ),
+        foregroundColor: WidgetStatePropertyAll(
+          _section.enabled ? scheme.onPrimary : scheme.onPrimaryContainer,
+        ),
+      ),
+      onPressed: _toggleSection,
+      icon: const Icon(Icons.content_cut),
+    );
+  }
+
   Widget _sectionFrame(Widget viewport) {
     if (!_section.enabled) return viewport;
-    final height = MediaQuery.sizeOf(context).height;
-    final cap = height * 0.38 < 280 ? height * 0.38 : 280.0;
-    return Column(
+    final size = MediaQuery.sizeOf(context);
+    final portrait = size.height > size.width && size.width < 1100;
+    return Stack(
       children: [
-        ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: cap),
+        Positioned.fill(child: viewport),
+        Positioned(
+          left: 8,
+          right: 8,
+          top: portrait ? 8 : null,
+          bottom: portrait ? null : 8,
           child: _sectionPanel(widget.strings),
         ),
-        Expanded(child: viewport),
       ],
     );
   }
 
   Widget _sectionPanel(S strings) {
+    final scheme = Theme.of(context).colorScheme;
+    final half = _sectionHalf;
+    final offsetLabel = half == null
+        ? strings.sectionOffset
+        : strings.sectionOffsetMetres(_section.offset * half);
+    final boxSpan = _sectionBoxSpan;
+    final keep = (1 - _section.inset).clamp(0.02, 1).toDouble();
+    final boxLabel = boxSpan == null
+        ? strings.sectionInset
+        : strings.sectionBoxMetres(keep * boxSpan);
     return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.96),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(strings.sectionHint, style: Theme.of(context).textTheme.bodySmall),
-            _sectionSlider(
-              strings.sectionNear,
-              _section.near,
-              0,
-              1,
-              const ValueKey('section-near'),
-              (value) => _setSection(_section.copyWith(near: value)),
-            ),
-            Wrap(
-              spacing: 6,
+            Row(
               children: [
-                for (final axis in const ['x', 'y', 'z', 'view'])
-                  ChoiceChip(
-                    label: Text(_axisLabel(strings, axis)),
-                    selected: _section.axis == axis,
-                    visualDensity: VisualDensity.compact,
-                    onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
+                Expanded(
+                  child: Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      for (final axis in const ['x', 'y', 'z', 'view'])
+                        ChoiceChip(
+                          label: Text(_axisLabel(strings, axis)),
+                          selected: _section.axis == axis,
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          onSelected: (_) => _setSection(_section.copyWith(axis: axis)),
+                        ),
+                    ],
                   ),
+                ),
+                IconButton(
+                  key: const ValueKey('section-flip'),
+                  tooltip: strings.sectionFlip,
+                  visualDensity: VisualDensity.compact,
+                  isSelected: _section.flip,
+                  color: _section.flip ? scheme.primary : null,
+                  onPressed: () => _setSection(_section.copyWith(flip: !_section.flip)),
+                  icon: const Icon(Icons.swap_horiz),
+                ),
               ],
             ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilterChip(
-                label: Text(strings.sectionFlip),
-                selected: _section.flip,
-                visualDensity: VisualDensity.compact,
-                onSelected: (value) => _setSection(_section.copyWith(flip: value)),
-              ),
-            ),
             _sectionSlider(
-              strings.sectionOffset,
+              offsetLabel,
               _section.offset,
               -1,
               1,
               const ValueKey('section-offset'),
               (value) => _setSection(_section.copyWith(offset: value)),
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: Text(strings.sectionBox),
-              subtitle: Text(strings.sectionBoxHint),
-              value: _section.box,
-              onChanged: (value) => _setSection(_section.copyWith(box: value)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                key: const ValueKey('section-more'),
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () => setState(() => _sectionMore = !_sectionMore),
+                child: Text(_sectionMore ? strings.sectionLess : strings.sectionMore),
+              ),
             ),
-            if (_section.box)
+            if (_sectionMore) ...[
               _sectionSlider(
-                strings.sectionInset,
-                _section.inset,
+                strings.sectionNear,
+                _section.near,
                 0,
                 1,
-                const ValueKey('section-inset'),
-                (value) => _setSection(_section.copyWith(inset: value)),
+                const ValueKey('section-near'),
+                (value) => _setSection(_section.copyWith(near: value)),
               ),
+              Row(
+                children: [
+                  Text(strings.sectionBox),
+                  const Spacer(),
+                  Switch(
+                    value: _section.box,
+                    onChanged: (value) => _setSection(
+                      _section.copyWith(box: value, inset: value ? _section.inset : 0),
+                    ),
+                  ),
+                ],
+              ),
+              if (_section.box)
+                _sectionSlider(
+                  boxLabel,
+                  keep,
+                  0.02,
+                  1,
+                  const ValueKey('section-inset'),
+                  (value) => _setSection(_section.copyWith(inset: 1 - value)),
+                ),
+            ],
           ],
         ),
       ),
@@ -850,12 +903,22 @@ class _ModelPageState extends State<ModelPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: Theme.of(context).textTheme.labelMedium),
-        Slider(
-          key: key,
-          value: value.clamp(min, max).toDouble(),
-          min: min,
-          max: max,
-          onChanged: onChanged,
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 8,
+            activeTrackColor: Theme.of(context).colorScheme.primary,
+            inactiveTrackColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.28),
+            thumbColor: Theme.of(context).colorScheme.primary,
+            overlayColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
+          ),
+          child: Slider(
+            key: key,
+            value: value.clamp(min, max).toDouble(),
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
         ),
       ],
     );
@@ -878,6 +941,13 @@ class _ModelPageState extends State<ModelPage>
       bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
+      onSectionSpan: (half, box) {
+        if (!mounted) return;
+        setState(() {
+          _sectionHalf = half;
+          _sectionBoxSpan = box;
+        });
+      },
     );
   }
 

@@ -65,10 +65,18 @@ class S {
   String get menu => russian ? 'Меню' : 'Menu';
   String get section => russian ? 'Срез' : 'Section';
   String get sectionHint => russian
-      ? 'Ближняя плоскость режет у фокуса и едет с камерой. Плоскость X, Y (вверх), Z или по взгляду отсекает в материале и не зависит от зума. Обратные грани — цветом среза, касание не выбирает отсечённое.'
-      : 'The near plane cuts at the focus and follows the camera. An X, Y (up), Z, or view plane clips in the material and stays put when you zoom. Back faces show the cut colour, and taps ignore clipped geometry.';
+      ? 'Плоскость X, Y (вверх), Z или по взгляду отсекает в материале и не зависит от зума. Лицевые грани остаются освещёнными, срез — цветом обратных граней. Рентген и подсветка выбора продолжают работать. Касание не выбирает отсечённое.'
+      : 'An X, Y (up), Z, or view plane clips in the material and stays put when you zoom. Front faces stay lit, and the cut is the back-face colour. X-ray and the selection highlight keep working. Taps ignore clipped geometry.';
   String get sectionNear => russian ? 'Ближняя' : 'Near';
   String get sectionOffset => russian ? 'Сдвиг' : 'Offset';
+  String sectionOffsetMetres(double metres) => russian
+      ? 'Сдвиг · ${metres.toStringAsFixed(1)} м'
+      : 'Offset · ${metres.toStringAsFixed(1)} m';
+  String sectionBoxMetres(double metres) => russian
+      ? 'Коробка · ${metres.toStringAsFixed(1)} м'
+      : 'Box · ${metres.toStringAsFixed(1)} m';
+  String get sectionMore => russian ? 'Ещё' : 'More';
+  String get sectionLess => russian ? 'Скрыть' : 'Less';
   String get sectionFlip => russian ? 'Сторона' : 'Side';
   String get sectionBox => russian ? 'Коробка' : 'Box';
   String get sectionBoxHint => russian

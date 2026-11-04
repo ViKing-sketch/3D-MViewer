@@ -30,6 +30,80 @@ class SectionClipTest {
     }
 
     @Test
+    fun flipKeepsAnOffsetPlaneAndOnlySwapsTheSide() {
+        val half = 20f
+        val centre = 29.39f
+        val at = 13.56f
+        val bounds = floatArrayOf(centre - half, 0f, -10f, centre + half, 8f, 10f)
+        val offset = (at - centre) / half
+        val kept = SectionClip.solve(
+            axis = "x",
+            flip = false,
+            offset = offset,
+            bounds = bounds,
+            eyeX = 0f,
+            eyeY = 4f,
+            eyeZ = 30f,
+            targetX = centre,
+            targetY = 4f,
+            targetZ = 0f,
+            boxEnabled = false,
+            boxInset = 0f,
+        )
+        val flipped = SectionClip.solve(
+            axis = "x",
+            flip = true,
+            offset = offset,
+            bounds = bounds,
+            eyeX = 0f,
+            eyeY = 4f,
+            eyeZ = 30f,
+            targetX = centre,
+            targetY = 4f,
+            targetZ = 0f,
+            boxEnabled = false,
+            boxInset = 0f,
+        )
+        assertEquals(1f, kept.nx, 1e-4f)
+        assertEquals(at, kept.d, 0.02f)
+        assertEquals(-1f, flipped.nx, 1e-4f)
+        assertEquals(-at, flipped.d, 0.02f)
+        assertEquals(kept.metres, flipped.metres, 0.02f)
+        assertFalse(SectionClip.clipped(10f, 2f, 0f, kept))
+        assertTrue(SectionClip.clipped(10f, 2f, 0f, flipped))
+    }
+
+    @Test
+    fun packageSpacePositionSurvivesAWorldPlaneThatMissesIt() {
+        val clip = SectionClip.solve(
+            axis = "y",
+            flip = false,
+            offset = 0f,
+            bounds = floatArrayOf(0f, 0f, -40f, 40f, 16f, 0f),
+            eyeX = 20f,
+            eyeY = 40f,
+            eyeZ = -20f,
+            targetX = 20f,
+            targetY = 8f,
+            targetZ = -20f,
+            boxEnabled = false,
+            boxInset = 0f,
+        )
+        assertEquals(8f, clip.d, 1e-3f)
+        assertTrue(SectionClip.clipped(29f, 80f, 8f, clip))
+        assertTrue(SectionClip.visible(29f, 80f, 8f, 29f, 80f, 8f, clip))
+        assertFalse(SectionClip.visible(29f, 40f, -20f, 29f, -20f, 40f, clip))
+    }
+
+    @Test
+    fun packageSpaceBoxKeepsAPointWhoseWorldYIsOutside() {
+        val clip = solve(axis = "x", flip = false, offset = 1f, box = true, inset = 0f)
+        assertTrue(SectionClip.clipped(5f, 80f, 1f, clip))
+        assertTrue(SectionClip.visible(5f, 80f, 1f, 5f, -1f, 2f, clip))
+        assertFalse(SectionClip.visible(5f, 80f, 1f, 5f, -80f, 80f, clip))
+    }
+
+    @Test
     fun offsetSlidesThePlaneToTheFarFace() {
         val positive = solve(axis = "y", flip = false, offset = 1f)
         assertEquals(1f, positive.ny, 1e-4f)

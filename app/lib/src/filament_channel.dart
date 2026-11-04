@@ -75,7 +75,7 @@ class SectionView {
     this.flip = false,
     this.offset = 0,
     this.box = false,
-    this.inset = 0.25,
+    this.inset = 0,
   });
 
   final bool enabled;

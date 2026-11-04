@@ -109,8 +109,10 @@ class FilamentPlatformView(
     private var xrayMaterial: Material? = null
     private var xrayInstance: MaterialInstance? = null
     private var sectionMaterial: Material? = null
+    private var sectionGhostMaterial: Material? = null
     private var sectionBody: MaterialInstance? = null
     private var sectionSelected: MaterialInstance? = null
+    private var sectionGhost: MaterialInstance? = null
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
     private var gesture: GestureDetector? = null
@@ -145,7 +147,7 @@ class FilamentPlatformView(
     private var sectionFlip = false
     private var sectionOffset = 0f
     private var sectionBox = false
-    private var sectionInset = 0.25f
+    private var sectionInset = 0f
     private var sectionActive = false
     private var liveClip: SectionClip.Clip? = null
     private var sentClip: SectionClip.Clip? = null
@@ -369,7 +371,7 @@ class FilamentPlatformView(
                 val flip = call.argument<Boolean>("flip") == true
                 val offset = finite(call.argument<Number>("offset")?.toDouble() ?: 0.0, 0.0).toFloat()
                 val box = call.argument<Boolean>("box") == true
-                val inset = finite(call.argument<Number>("inset")?.toDouble() ?: 0.25, 0.25).toFloat()
+                val inset = finite(call.argument<Number>("inset")?.toDouble() ?: 0.0, 0.0).toFloat()
                 renderHandler.post {
                     if (destroyed) return@post
                     sectionEnabled = enabled
@@ -1098,7 +1100,11 @@ class FilamentPlatformView(
             if (instance == 0 || !show) continue
             val original = originals.getOrPut(entity) { rm.getMaterialInstanceAt(instance, 0) }
             if (sectionActive && sectionBody != null) {
-                val painted = if (id == selected) sectionSelected ?: sectionBody!! else sectionBody!!
+                val painted = when {
+                    id == selected -> sectionSelected ?: sectionBody!!
+                    xray && sectionGhost != null -> sectionGhost!!
+                    else -> sectionBody!!
+                }
                 rm.setMaterialInstanceAt(instance, 0, painted)
                 continue
             }
@@ -1442,24 +1448,44 @@ class FilamentPlatformView(
     }
 
     private fun loadSection() {
-        try {
-            val bytes = context.assets.open("materials/section.filamat").use { it.readBytes() }
-            val buffer = ByteBuffer.allocateDirect(bytes.size)
-            buffer.put(bytes)
-            buffer.flip()
-            val material = Material.Builder().payload(buffer, buffer.remaining()).build(engine)
-            sectionMaterial = material
-            sectionBody = material.createInstance().also { paintSection(it, false) }
-            sectionSelected = material.createInstance().also { paintSection(it, true) }
-        } catch (error: Exception) {
-            Log.w(TAG, "section material: ${error.message}")
+        sectionMaterial = openMaterial("materials/section.filamat")
+        sectionGhostMaterial = openMaterial("materials/section_ghost.filamat")
+        val material = sectionMaterial
+        if (material == null) return
+        sectionBody = material.createInstance().also { paintSection(it, selected = false, ghost = false) }
+        sectionSelected = material.createInstance().also { paintSection(it, selected = true, ghost = false) }
+        sectionGhost = sectionGhostMaterial?.createInstance()?.also {
+            paintSection(it, selected = false, ghost = true)
         }
     }
 
-    private fun paintSection(instance: MaterialInstance, selected: Boolean) {
-        val color = if (selected) HIGHLIGHT else SECTION_BODY
+    private fun openMaterial(path: String): Material? {
+        return try {
+            val bytes = context.assets.open(path).use { it.readBytes() }
+            val buffer = ByteBuffer.allocateDirect(bytes.size)
+            buffer.put(bytes)
+            buffer.flip()
+            Material.Builder().payload(buffer, buffer.remaining()).build(engine)
+        } catch (error: Exception) {
+            Log.w(TAG, "section material $path: ${error.message}")
+            null
+        }
+    }
+
+    private fun paintSection(instance: MaterialInstance, selected: Boolean, ghost: Boolean) {
+        val color = when {
+            ghost -> SECTION_GHOST
+            selected -> HIGHLIGHT
+            else -> SECTION_BODY
+        }
+        val roughness = when {
+            ghost -> 0.9f
+            selected -> 0.42f
+            else -> 0.78f
+        }
         instance.setParameter("baseColor", color[0], color[1], color[2], color[3])
         instance.setParameter("capColor", SECTION_CAP[0], SECTION_CAP[1], SECTION_CAP[2], SECTION_CAP[3])
+        instance.setParameter("roughness", roughness)
         instance.setParameter("clipPlane", 0f, 0f, 0f, 0f)
         instance.setParameter("boxMin", 0f, 0f, 0f, 0f)
         instance.setParameter("boxMax", 0f, 0f, 0f, 0f)
@@ -1469,7 +1495,6 @@ class FilamentPlatformView(
         val want = sectionEnabled && sectionBody != null
         if (want) {
             updateSectionUniforms()
-            if (log) logSection()
         } else {
             liveClip = null
             sentClip = null
@@ -1479,6 +1504,7 @@ class FilamentPlatformView(
             sectionActive = want
             applyVisibility()
         }
+        if (log) logSection()
     }
 
     private fun updateSectionUniforms() {
@@ -1504,6 +1530,7 @@ class FilamentPlatformView(
         sentClip = clip
         pushClip(body, clip)
         sectionSelected?.let { pushClip(it, clip) }
+        sectionGhost?.let { pushClip(it, clip) }
     }
 
     private fun pushClip(instance: MaterialInstance, clip: SectionClip.Clip) {
@@ -1544,12 +1571,34 @@ class FilamentPlatformView(
 
     private fun logSection() {
         val clip = liveClip
+        if (!sectionEnabled || clip == null) {
+            Log.i(TAG, "section enabled=false")
+            publishSection(0f, 0f)
+            return
+        }
         Log.i(
             TAG,
-            "section enabled=$sectionEnabled axis=$sectionAxis flip=$sectionFlip " +
-                "offset=$sectionOffset near=$sectionNearAmount box=$sectionBox " +
-                "plane=${clip?.nx},${clip?.ny},${clip?.nz},${clip?.d}",
+            "section enabled=true axis=$sectionAxis flip=$sectionFlip " +
+                "offset=$sectionOffset metres=${clip.metres} near=$sectionNearAmount " +
+                "box=$sectionBox inset=$sectionInset " +
+                "plane=${clip.nx},${clip.ny},${clip.nz},${clip.d} " +
+                "centre=${clip.cx},${clip.cy},${clip.cz} " +
+                "boxMin=${clip.minX},${clip.minY},${clip.minZ} " +
+                "boxMax=${clip.maxX},${clip.maxY},${clip.maxZ}",
         )
+        publishSection(clip.reach, clip.boxSpan)
+    }
+
+    private fun publishSection(half: Float, box: Float) {
+        mainHandler.post {
+            try {
+                channel.invokeMethod(
+                    "onSection",
+                    mapOf("half" to half.toDouble(), "box" to box.toDouble()),
+                )
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun finite(value: Double, fallback: Double): Double {
@@ -1667,13 +1716,17 @@ class FilamentPlatformView(
         step("section-instances") {
             sectionBody?.let { engine.destroyMaterialInstance(it) }
             sectionSelected?.let { engine.destroyMaterialInstance(it) }
+            sectionGhost?.let { engine.destroyMaterialInstance(it) }
         }
         sectionBody = null
         sectionSelected = null
+        sectionGhost = null
         step("section-material") {
             sectionMaterial?.let { engine.destroyMaterial(it) }
+            sectionGhostMaterial?.let { engine.destroyMaterial(it) }
         }
         sectionMaterial = null
+        sectionGhostMaterial = null
         step("lights") {
             scene.indirectLight = null
             scene.skybox = null
@@ -1765,8 +1818,9 @@ class FilamentPlatformView(
         private const val TAG = "FbvFilament"
         private val HIGHLIGHT = floatArrayOf(1f, 0.45f, 0.08f, 1f)
         private val STAND_IN = floatArrayOf(0.95f, 0.45f, 0.12f, 1f)
-        private val SECTION_BODY = floatArrayOf(0.75f, 0.77f, 0.80f, 1f)
-        private val SECTION_CAP = floatArrayOf(0.92f, 0.40f, 0.16f, 1f)
+        private val SECTION_BODY = floatArrayOf(0.73f, 0.75f, 0.78f, 1f)
+        private val SECTION_CAP = floatArrayOf(0.93f, 0.38f, 0.14f, 1f)
+        private val SECTION_GHOST = floatArrayOf(0.62f, 0.76f, 0.90f, 0.28f)
 
         /** Column-major (x, y, z) -> (x, z, -y). */
         private val Z_TO_Y = floatArrayOf(

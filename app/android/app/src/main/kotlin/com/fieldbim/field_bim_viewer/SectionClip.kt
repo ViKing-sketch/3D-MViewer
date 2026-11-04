@@ -25,6 +25,12 @@ object SectionClip {
         val maxX: Float,
         val maxY: Float,
         val maxZ: Float,
+        val reach: Float,
+        val metres: Float,
+        val cx: Float,
+        val cy: Float,
+        val cz: Float,
+        val boxSpan: Float,
     ) {
         fun matches(other: Clip): Boolean {
             return close(nx, other.nx) && close(ny, other.ny) && close(nz, other.nz) &&
@@ -72,9 +78,6 @@ object SectionClip {
         boxInset: Float,
     ): Clip {
         val n = normal(axis, eyeX, eyeY, eyeZ, targetX, targetY, targetZ)
-        val nx = if (flip) -n[0] else n[0]
-        val ny = if (flip) -n[1] else n[1]
-        val nz = if (flip) -n[2] else n[2]
         val minX = minOf(bounds[0], bounds[3])
         val minY = minOf(bounds[1], bounds[4])
         val minZ = minOf(bounds[2], bounds[5])
@@ -87,12 +90,16 @@ object SectionClip {
         val hx = (maxX - minX) * 0.5f
         val hy = (maxY - minY) * 0.5f
         val hz = (maxZ - minZ) * 0.5f
-        val reach = abs(nx) * hx + abs(ny) * hy + abs(nz) * hz
+        val reach = abs(n[0]) * hx + abs(n[1]) * hy + abs(n[2]) * hz
         val span = if (reach < 1e-3f) 1f else reach
         val along = offset.coerceIn(-1f, 1f) * span
-        val px = cx + nx * along
-        val py = cy + ny * along
-        val pz = cz + nz * along
+        val px = cx + n[0] * along
+        val py = cy + n[1] * along
+        val pz = cz + n[2] * along
+        val sign = if (flip) -1f else 1f
+        val nx = n[0] * sign
+        val ny = n[1] * sign
+        val nz = n[2] * sign
         val shrink = (1f - boxInset.coerceIn(0f, 1f)).coerceIn(0.02f, 1f)
         return Clip(
             nx = nx,
@@ -106,7 +113,33 @@ object SectionClip {
             maxX = cx + hx * shrink,
             maxY = cy + hy * shrink,
             maxZ = cz + hz * shrink,
+            reach = span,
+            metres = along,
+            cx = cx,
+            cy = cy,
+            cz = cz,
+            boxSpan = minOf(hx, minOf(hy, hz)) * 2f,
         )
+    }
+
+    /**
+     * Shader keep test. [world] is the API Y-up position (`getUserWorldPosition`,
+     * not the camera-shifted `getWorldPosition`). [mesh] is the package-space
+     * vertex. The root turn is `(x, y, z) -> (x, z, -y)`. A fragment is removed
+     * only when both positions are on the cut side.
+     */
+    fun visible(
+        worldX: Float,
+        worldY: Float,
+        worldZ: Float,
+        meshX: Float,
+        meshY: Float,
+        meshZ: Float,
+        clip: Clip,
+    ): Boolean {
+        val worldOut = clipped(worldX, worldY, worldZ, clip)
+        val liftedOut = clipped(meshX, meshZ, -meshY, clip)
+        return !worldOut || !liftedOut
     }
 
     /** Exact shader test: clipped when the point is strictly past the plane or outside the box. */
@@ -137,6 +170,12 @@ object SectionClip {
             maxX = clip.maxX + eps,
             maxY = clip.maxY + eps,
             maxZ = clip.maxZ + eps,
+            reach = clip.reach,
+            metres = clip.metres,
+            cx = clip.cx,
+            cy = clip.cy,
+            cz = clip.cz,
+            boxSpan = clip.boxSpan,
         )
         return clipped(x, y, z, loosened)
     }
