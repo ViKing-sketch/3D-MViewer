@@ -138,6 +138,9 @@ class FilamentPlatformView(
     private var xray = false
     private var viewportW = 1
     private var viewportH = 1
+    private var fitBottomInset = 0.0
+    private val cameraView = DoubleArray(16)
+    private val cameraProjection = DoubleArray(16)
     private var near = 0.05
     private var far = 2000.0
     private var frameMin = floatArrayOf(-1f, -1f, -1f)
@@ -317,6 +320,19 @@ class FilamentPlatformView(
                 renderHandler.post {
                     if (destroyed) return@post
                     frame(if (selectedFit) selectedBox() else allBox(), preset)
+                }
+                result.success(null)
+            }
+            "setFitInset" -> {
+                val bottom = call.argument<Number>("bottom")?.toDouble() ?: 0.0
+                renderHandler.post {
+                    if (destroyed) return@post
+                    val next = bottom.coerceIn(0.0, 0.72)
+                    if (kotlin.math.abs(next - fitBottomInset) < 0.015) return@post
+                    fitBottomInset = next
+                    applyViewViewport()
+                    val box = framedBox
+                    if (box != null) frame(box, preset) else updateProjection()
                 }
                 result.success(null)
             }
@@ -542,17 +558,19 @@ class FilamentPlatformView(
         plan.preview?.let { bufferQueue.add(PendingGlb(it.buffer, preview = true)) }
         plan.proxy?.let { bufferQueue.add(PendingGlb(it.buffer, preview = false)) }
         sceneArmed = true
-        val fit = SceneBounds.union(records.values, standInIds)
+        val fit = SceneBounds.fit(records.values, standInIds)
         if (fit != null) {
+            val box = fit.bounds
             Log.i(
                 TAG,
-                "fit min=${fit[0]},${fit[1]},${fit[2]} max=${fit[3]},${fit[4]},${fit[5]} " +
-                    "elements=${records.size} standIns=${standInIds.size}",
+                "fit min=${box[0]},${box[1]},${box[2]} max=${box[3]},${box[4]},${box[5]} " +
+                    "kept=${fit.kept} elements=${fit.total} standIns=${standInIds.size}",
             )
+            frame(box, preset)
         } else {
             Log.i(TAG, "fit empty elements=${records.size} standIns=${standInIds.size}")
+            frame(null, preset)
         }
-        frame(fit, preset)
         plan.preview?.let { retainedBuffers.add(it.buffer) }
         plan.proxy?.let { retainedBuffers.add(it.buffer) }
         reportProgress()
@@ -1106,22 +1124,18 @@ class FilamentPlatformView(
         }
         frameMin = bounds.copyOfRange(0, 3)
         frameMax = bounds.copyOfRange(3, 6)
-        val aspect = if (viewportW > 1 && viewportH > 1) {
-            viewportW.toDouble() / viewportH.toDouble()
-        } else {
-            1.0
-        }
-        val pose = CameraFit.pose(bounds, cameraPreset, aspect)
+        val aspect = frameAspect()
+        val solved = tighten(CameraFit.pose(bounds, cameraPreset, aspect), bounds)
         framedBox = bounds.copyOf()
         framedAspect = aspect
-        near = max(0.02, pose.radius / 4000.0)
-        far = max(pose.distance.toDouble() * 80.0, pose.radius * 80.0)
+        near = max(0.02, solved.radius / 4000.0)
+        far = max(solved.distance.toDouble() * 80.0, solved.radius * 80.0)
         if (far < 500.0) far = 500.0
-        val zoom = max(pose.distance * 0.035f, 0.25f)
+        val zoom = max(solved.distance * 0.035f, 0.25f)
         manipulator = Manipulator.Builder()
             .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
-            .targetPosition(pose.targetX, pose.targetY, pose.targetZ)
-            .orbitHomePosition(pose.eyeX, pose.eyeY, pose.eyeZ)
+            .targetPosition(solved.targetX, solved.targetY, solved.targetZ)
+            .orbitHomePosition(solved.eyeX, solved.eyeY, solved.eyeZ)
             .upVector(0f, 1f, 0f)
             .zoomSpeed(zoom)
             .fovDegrees(CameraFit.fovDegrees.toFloat())
@@ -1130,17 +1144,99 @@ class FilamentPlatformView(
             .build(Manipulator.Mode.ORBIT)
         gesture = GestureDetector(surfaceView, manipulator!!)
         framed = true
+        applyViewViewport()
         updateProjection()
+        val ndc = if (engineAlive) readNdc(bounds) else CameraFit.maxAbsNdc(bounds, solved, aspect)
         Log.i(
             TAG,
-            "frame target=${pose.targetX},${pose.targetY},${pose.targetZ} " +
-                "eye=${pose.eyeX},${pose.eyeY},${pose.eyeZ} " +
-                "dist=${pose.distance} radius=${pose.radius} aspect=$aspect preset=$cameraPreset",
+            "frame target=${solved.targetX},${solved.targetY},${solved.targetZ} " +
+                "eye=${solved.eyeX},${solved.eyeY},${solved.eyeZ} " +
+                "dist=${solved.distance} radius=${solved.radius} ndc=$ndc " +
+                "aspect=$aspect inset=$fitBottomInset preset=$cameraPreset",
         )
     }
 
+    /**
+     * Move the eye along the view until the live Filament matrices put the
+     * corners at the edge of the picture. The analytic pose is the start.
+     */
+    private fun tighten(pose: CameraFit.Pose, bounds: FloatArray): CameraFit.Pose {
+        if (!engineAlive) return pose
+        val dx = (pose.eyeX - pose.targetX).toDouble()
+        val dy = (pose.eyeY - pose.targetY).toDouble()
+        val dz = (pose.eyeZ - pose.targetZ).toDouble()
+        val len = sqrt(dx * dx + dy * dy + dz * dz).coerceAtLeast(1e-4)
+        val ux = dx / len
+        val uy = dy / len
+        val uz = dz / len
+        near = max(0.02, pose.radius / 4000.0)
+        far = max(pose.distance.toDouble() * 80.0, 500.0)
+        fun ndcAt(distance: Double): Float {
+            camera.lookAt(
+                pose.targetX + ux * distance,
+                pose.targetY + uy * distance,
+                pose.targetZ + uz * distance,
+                pose.targetX.toDouble(),
+                pose.targetY.toDouble(),
+                pose.targetZ.toDouble(),
+                0.0,
+                1.0,
+                0.0,
+            )
+            updateProjection()
+            return readNdc(bounds)
+        }
+        val guessed = ndcAt(pose.distance.toDouble())
+        if (guessed in 0.90f..1.02f || guessed > 4f) return pose
+        var lo = 0.5
+        var hi = max(pose.distance.toDouble() * 4.0, pose.radius * 8.0)
+        repeat(8) {
+            val farNdc = ndcAt(hi)
+            if (farNdc > 4f) return pose
+            if (farNdc <= 1.0f) return@repeat
+            hi *= 1.6
+        }
+        repeat(16) {
+            val mid = (lo + hi) * 0.5
+            val midNdc = ndcAt(mid)
+            if (midNdc > 4f) return pose
+            if (midNdc > 0.96f) lo = mid else hi = mid
+        }
+        val solved = ndcAt(hi)
+        if (solved !in 0.90f..1.02f) return pose
+        return pose.copy(
+            eyeX = (pose.targetX + ux * hi).toFloat(),
+            eyeY = (pose.targetY + uy * hi).toFloat(),
+            eyeZ = (pose.targetZ + uz * hi).toFloat(),
+            distance = hi.toFloat(),
+        )
+    }
+
+    private fun readNdc(bounds: FloatArray): Float {
+        camera.getViewMatrix(cameraView)
+        camera.getProjectionMatrix(cameraProjection)
+        return CameraFit.maxAbsNdc(cameraView, cameraProjection, bounds)
+    }
+
+    private fun frameAspect(): Double {
+        val height = visibleHeight()
+        return if (viewportW > 1 && height > 1) viewportW.toDouble() / height else 1.0
+    }
+
+    private fun visibleHeight(): Int {
+        val full = viewportH.coerceAtLeast(1)
+        val height = (full * (1.0 - fitBottomInset.coerceIn(0.0, 0.72))).toInt()
+        return height.coerceIn(1, full)
+    }
+
+    private fun applyViewViewport() {
+        if (!engineAlive) return
+        val height = visibleHeight()
+        view.viewport = Viewport(0, viewportH - height, viewportW.coerceAtLeast(1), height)
+    }
+
     private fun allBox(): FloatArray? {
-        return SceneBounds.union(records.values, standInIds)
+        return SceneBounds.fit(records.values, standInIds)?.bounds
             ?: floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
     }
 
@@ -1209,8 +1305,7 @@ class FilamentPlatformView(
 
     private fun updateProjection() {
         if (viewportW <= 0 || viewportH <= 0) return
-        val aspect = viewportW.toDouble() / viewportH.toDouble()
-        camera.setProjection(45.0, aspect, near, far, Camera.Fov.VERTICAL)
+        camera.setProjection(45.0, frameAspect(), near, far, Camera.Fov.VERTICAL)
     }
 
     private fun onTouch(event: MotionEvent): Boolean {
@@ -1453,9 +1548,9 @@ class FilamentPlatformView(
                 if (width < 2 || height < 2) return@post
                 viewportW = width
                 viewportH = height
-                view.viewport = Viewport(0, 0, viewportW, viewportH)
+                applyViewViewport()
                 manipulator?.setViewport(viewportW, viewportH)
-                val aspect = viewportW.toDouble() / viewportH.toDouble()
+                val aspect = frameAspect()
                 val box = framedBox
                 if (box != null && kotlin.math.abs(aspect - framedAspect) > 0.05) {
                     frame(box, preset)

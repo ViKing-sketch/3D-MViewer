@@ -59,4 +59,20 @@ class CameraFitTest {
         assertTrue(CameraFit.frames(box, "front", 0.46))
         assertTrue(CameraFit.frames(box, "iso", 0.46))
     }
+
+    @Test
+    fun deviceLogFillsTheFrustum() {
+        // ff15717 log: the full site at aspect 0.7315 was dist=649. The eight
+        // corners have to reach the picture, not sit at a third of it.
+        val box = floatArrayOf(0f, 0f, -278.99225f, 224.77005f, 65.460175f, 0f)
+        val pose = CameraFit.pose(box, "iso", 0.7315)
+        val ndc = CameraFit.maxAbsNdc(box, pose, 0.7315)
+        assertEquals(112.385025f, pose.targetX, 0.02f)
+        assertEquals(32.730087f, pose.targetY, 0.02f)
+        assertTrue(ndc > 0.92f)
+        assertTrue(ndc <= 1.0f)
+        assertTrue(pose.distance > 500f)
+        assertTrue(pose.distance < 760f)
+        assertTrue(CameraFit.frames(box, "iso", 0.7315))
+    }
 }

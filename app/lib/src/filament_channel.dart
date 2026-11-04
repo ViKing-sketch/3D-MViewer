@@ -50,4 +50,9 @@ class FilamentCommands {
   Future<void> setCamera(String preset) {
     return channel.invokeMethod<void>('setCamera', {'preset': preset});
   }
+
+  /// Fraction of the platform view covered from the bottom, usually by the sheet.
+  Future<void> setFitInset(double bottom) {
+    return channel.invokeMethod<void>('setFitInset', {'bottom': bottom});
+  }
 }

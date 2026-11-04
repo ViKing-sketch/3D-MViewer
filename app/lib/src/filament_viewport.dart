@@ -64,6 +64,9 @@ class FilamentViewportState extends State<FilamentViewport> {
   Future<void> setCamera(String preset) =>
       _commands?.setCamera(preset) ?? Future<void>.value();
 
+  Future<void> setFitInset(double bottom) =>
+      _commands?.setFitInset(bottom) ?? Future<void>.value();
+
   Future<void> release() => _commands?.release() ?? Future<void>.value();
 
   @override
@@ -160,12 +163,20 @@ class FilamentViewportState extends State<FilamentViewport> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(child: _platformView(context)),
         if (_status != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Text(_status!, maxLines: 2, overflow: TextOverflow.ellipsis),
+          Material(
+            color: Theme.of(context).colorScheme.surface,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Text(
+                _status!,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ),
+        Expanded(child: ClipRect(child: _platformView(context))),
       ],
     );
   }

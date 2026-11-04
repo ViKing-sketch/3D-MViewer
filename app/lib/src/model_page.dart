@@ -45,6 +45,10 @@ class _ModelPageState extends State<ModelPage>
   Set<int> _standIns = {};
   void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
+  final _portraitKey = GlobalKey();
+  final _renderBarKey = GlobalKey();
+  final _sheet = DraggableScrollableController();
+  double _fitBottomInset = 0;
   late final TabController _tabs;
 
   @override
@@ -52,6 +56,7 @@ class _ModelPageState extends State<ModelPage>
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
     _tabs.addListener(_onTab);
+    _sheet.addListener(_syncFitInset);
     final type = FileSystemEntity.typeSync(widget.path);
     if (type == FileSystemEntityType.file) {
       _opening = true;
@@ -150,6 +155,8 @@ class _ModelPageState extends State<ModelPage>
     _cancelExtract?.call();
     _tabs.removeListener(_onTab);
     _tabs.dispose();
+    _sheet.removeListener(_syncFitInset);
+    _sheet.dispose();
     _session?.close();
     super.dispose();
   }
@@ -167,6 +174,7 @@ class _ModelPageState extends State<ModelPage>
   void _choose(int? id) {
     setState(() {
       _selectedId = id;
+      if (id != null && _standIns.contains(id)) _xray = true;
       _renderRevision++;
     });
   }
@@ -179,10 +187,38 @@ class _ModelPageState extends State<ModelPage>
   void _jumpTo(int id) {
     setState(() {
       _selectedId = id;
+      _xray = true;
       _renderRevision++;
       _frameToken++;
     });
     if (_tabs.index != 0) _tabs.animateTo(0);
+  }
+
+  void _scheduleFitInset(double? forced) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (forced != null) {
+        _pushFitInset(forced);
+        return;
+      }
+      _syncFitInset();
+    });
+  }
+
+  void _syncFitInset() {
+    final stack = _portraitKey.currentContext?.size?.height;
+    final bar = _renderBarKey.currentContext?.size?.height ?? 0;
+    if (stack == null || stack <= bar + 1) return;
+    final sheet = _sheet.isAttached ? _sheet.size : 0.22;
+    final overlap = (sheet * stack).clamp(0.0, stack - bar);
+    _pushFitInset(overlap / (stack - bar));
+  }
+
+  void _pushFitInset(double inset) {
+    final next = inset.clamp(0.0, 0.72);
+    if ((next - _fitBottomInset).abs() < 0.015) return;
+    _fitBottomInset = next;
+    _viewport.currentState?.setFitInset(next);
   }
 
   bool _sameIds(Set<int> a, Set<int> b) {
@@ -442,8 +478,14 @@ class _ModelPageState extends State<ModelPage>
         final landscape = !wide && constraints.maxWidth > constraints.maxHeight;
         final selected = _selected;
         final viewport = _viewportOf(selected);
-        if (wide) return _wideWorkspace(context, viewport, selected);
-        if (landscape) return _landscapeView(context, viewport, selected);
+        if (wide) {
+          _scheduleFitInset(0);
+          return _wideWorkspace(context, viewport, selected);
+        }
+        if (landscape) {
+          _scheduleFitInset(0);
+          return _landscapeView(context, viewport, selected);
+        }
         return _portraitView(context, viewport, selected);
       },
     );
@@ -485,15 +527,18 @@ class _ModelPageState extends State<ModelPage>
     ElementInfo? selected,
   ) {
     final strings = widget.strings;
+    _scheduleFitInset(null);
     return Stack(
+      key: _portraitKey,
       children: [
         Column(
           children: [
-            _renderBar(strings),
+            KeyedSubtree(key: _renderBarKey, child: _renderBar(strings)),
             Expanded(child: viewport),
           ],
         ),
         DraggableScrollableSheet(
+          controller: _sheet,
           initialChildSize: 0.22,
           minChildSize: 0.12,
           maxChildSize: 0.88,

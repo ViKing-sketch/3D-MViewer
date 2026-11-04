@@ -7,6 +7,8 @@ import kotlin.math.max
  * stand-in whose source box is far larger than the real scene is clamped so it
  * cannot cover the model.
  */
+data class SceneFit(val bounds: FloatArray, val kept: Int, val total: Int)
+
 object SceneBounds {
     fun union(geoms: Iterable<ElementGeom>, skip: Set<Long> = emptySet()): FloatArray? {
         var minX = Float.POSITIVE_INFINITY
@@ -28,6 +30,48 @@ object SceneBounds {
         }
         if (!any || minX == Float.POSITIVE_INFINITY) return null
         return floatArrayOf(minX, minY, minZ, maxX, maxY, maxZ)
+    }
+
+    /**
+     * Union of the elements that sit in the core of the cloud.
+     *
+     * A few far centres (a site shell, a stray grid) stretch the plain union and
+     * leave the building small and off to one side. Centres outside the padded
+     * 5th–95th percentile on any axis are left out of the fit. A compact model
+     * keeps every element.
+     */
+    fun fit(geoms: Iterable<ElementGeom>, skip: Set<Long> = emptySet()): SceneFit? {
+        val list = ArrayList<ElementGeom>()
+        for (geom in geoms) {
+            if (geom.id in skip) continue
+            if (geom.min.size < 3 || geom.max.size < 3) continue
+            list.add(geom)
+        }
+        if (list.isEmpty()) return null
+        var kept: List<ElementGeom> = list
+        if (list.size >= 16) {
+            for (axis in 0..2) {
+                val next = keepCore(kept, axis)
+                if (next.size >= 8 && next.size * 5 >= kept.size * 3) kept = next
+            }
+        }
+        val bounds = union(kept) ?: return null
+        return SceneFit(bounds, kept.size, list.size)
+    }
+
+    private fun keepCore(geoms: List<ElementGeom>, axis: Int): List<ElementGeom> {
+        val order = geoms.sortedBy { center(it, axis) }
+        val n = order.size
+        val low = center(order[((n - 1) * 0.05f).toInt()], axis)
+        val high = center(order[((n - 1) * 0.95f).toInt()], axis)
+        val pad = max(1f, (high - low) * 0.2f)
+        val minCenter = low - pad
+        val maxCenter = high + pad
+        return order.filter { center(it, axis) in minCenter..maxCenter }
+    }
+
+    private fun center(geom: ElementGeom, axis: Int): Float {
+        return (geom.min[axis] + geom.max[axis]) * 0.5f
     }
 
     /** Axis-aligned union. Framing uses this so the larger of two boxes wins. */

@@ -2,6 +2,7 @@ package com.fieldbim.field_bim_viewer
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SceneBoundsTest {
@@ -47,6 +48,36 @@ class SceneBoundsTest {
         assertEquals(10f, clamped.max[0] - clamped.min[0], 0.001f)
         assertEquals(2f, clamped.max[1] - clamped.min[1], 0.001f)
         assertEquals(2f, clamped.max[2] - clamped.min[2], 0.001f)
+    }
+
+    @Test
+    fun fitDropsDistantOutliers() {
+        val cluster = (0 until 30).map { i ->
+            val x = i * 0.4f
+            geom(i.toLong(), x, 0f, 0f, x + 1f, 2f, 1f)
+        }
+        val far = listOf(
+            geom(100, 200f, 0f, 0f, 202f, 2f, 1f),
+            geom(101, 210f, 0f, 0f, 212f, 2f, 1f),
+        )
+        val fit = SceneBounds.fit(cluster + far)
+        requireNotNull(fit)
+        assertTrue(fit.kept < fit.total)
+        assertTrue(fit.bounds[3] < 20f)
+        assertEquals(0f, fit.bounds[0], 0.01f)
+    }
+
+    @Test
+    fun fitKeepsAContinuousRun() {
+        val run = (0 until 20).map { i ->
+            val x = i * 5f
+            geom(i.toLong(), x, 0f, 0f, x + 4f, 3f, 2f)
+        }
+        val fit = SceneBounds.fit(run)
+        requireNotNull(fit)
+        assertEquals(20, fit.kept)
+        assertEquals(0f, fit.bounds[0], 0.01f)
+        assertEquals(99f, fit.bounds[3], 0.01f)
     }
 
     private fun geom(id: Long, minX: Float, minY: Float, minZ: Float, maxX: Float, maxY: Float, maxZ: Float) =
