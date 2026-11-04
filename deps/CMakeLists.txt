@@ -245,8 +245,12 @@ else()
 endif()
 
 add_subdirectory("${ifcopenshell_SOURCE_DIR}/cmake" "${ifcopenshell_BINARY_DIR}" EXCLUDE_FROM_ALL)
+# IfcParse is linked with the plain signature in its own CMakeLists
+# (target_link_libraries(IfcParse ${Boost_LIBRARIES})). A keyword form here
+# is rejected by CMP0023 on CMake 3.31 and 4. The plain form still puts
+# Boost::locale on the static link interface.
 if(TARGET Boost::locale)
-  target_link_libraries(IfcParse PUBLIC Boost::locale)
+  target_link_libraries(IfcParse Boost::locale)
 endif()
 set(BUILD_SHARED_LIBS "${_fbv_shared_libs}")
 
