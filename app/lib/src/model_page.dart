@@ -241,11 +241,11 @@ class _ModelPageState extends State<ModelPage>
   }
 
   Widget _renderBar(S strings) {
-    return SizedBox(
-      height: 48,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 0,
         children: [
           TextButton(
             onPressed: () => _viewport.currentState?.fitAll(),
@@ -258,7 +258,13 @@ class _ModelPageState extends State<ModelPage>
           TextButton(onPressed: _hideSelected, child: Text(strings.hide)),
           TextButton(onPressed: _showAll, child: Text(strings.showAll)),
           TextButton(onPressed: _isolateSelected, child: Text(strings.isolate)),
-          TextButton(onPressed: _toggleXray, child: Text(strings.xray)),
+          Tooltip(
+            message: strings.xrayHint,
+            child: TextButton(
+              onPressed: _toggleXray,
+              child: Text(strings.xray),
+            ),
+          ),
           TextButton(
             onPressed: () => _viewport.currentState?.setCamera('front'),
             child: Text(strings.viewFront),
@@ -573,7 +579,7 @@ class _ModelPageState extends State<ModelPage>
             icon: const Icon(Icons.filter_center_focus),
           ),
           IconButton(
-            tooltip: strings.xray,
+            tooltip: strings.xrayHint,
             style: style,
             onPressed: _toggleXray,
             icon: const Icon(Icons.blur_on),

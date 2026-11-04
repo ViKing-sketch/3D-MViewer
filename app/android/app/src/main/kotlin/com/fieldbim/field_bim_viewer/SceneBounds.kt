@@ -30,6 +30,18 @@ object SceneBounds {
         return floatArrayOf(minX, minY, minZ, maxX, maxY, maxZ)
     }
 
+    /** Axis-aligned union. Framing uses this so the larger of two boxes wins. */
+    fun enclosing(a: FloatArray, b: FloatArray): FloatArray {
+        return floatArrayOf(
+            minOf(a[0], b[0]),
+            minOf(a[1], b[1]),
+            minOf(a[2], b[2]),
+            maxOf(a[3], b[3]),
+            maxOf(a[4], b[4]),
+            maxOf(a[5], b[5]),
+        )
+    }
+
     /** Longest axis of [box], or 100 m when there is no real geometry yet. */
     fun span(box: FloatArray?): Float {
         if (box == null) return 100f

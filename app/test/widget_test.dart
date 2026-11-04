@@ -180,6 +180,14 @@ void main() {
     expect(find.text('3D'), findsOneWidget);
     expect(find.text('Дерево'), findsOneWidget);
     expect(find.text('Выберите элемент'), findsOneWidget);
+    expect(find.byTooltip('Меню'), findsOneWidget);
+    expect(
+      find.byTooltip(
+        'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Показать всё'), findsOneWidget);
 
     await tester.tap(find.text('Дерево'));
     await tester.pumpAndSettle();

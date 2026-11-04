@@ -48,4 +48,15 @@ class CameraFitTest {
         assertTrue(CameraFit.frames(box, "iso", 1.8))
         assertTrue(CameraFit.frames(box, "front", 0.46))
     }
+
+    @Test
+    fun tallBoxIsFramedTighterThanASphere() {
+        val box = floatArrayOf(-1f, 0f, -1f, 1f, 40f, 1f)
+        val pose = CameraFit.pose(box, "front", 0.46)
+        assertTrue(pose.distance > pose.radius)
+        // A sphere around this column sits much farther out than the projected box.
+        assertTrue(pose.distance < pose.radius * 4f)
+        assertTrue(CameraFit.frames(box, "front", 0.46))
+        assertTrue(CameraFit.frames(box, "iso", 0.46))
+    }
 }

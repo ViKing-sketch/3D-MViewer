@@ -143,8 +143,9 @@ class FilamentPlatformView(
     private var frameMin = floatArrayOf(-1f, -1f, -1f)
     private var frameMax = floatArrayOf(1f, 1f, 1f)
     private var preset = "iso"
-    private var destroyed = false
+    @Volatile private var destroyed = false
     private var framed = false
+    private var refitSelected = false
     private var framedBox: FloatArray? = null
     private var framedAspect = 0.0
     private val replaced = HashSet<Long>()
@@ -303,8 +304,11 @@ class FilamentPlatformView(
                     xray = nextXray
                     ensureSelected(selected)
                     applyVisibility()
-                    if (frameSelected && selected != 0L) frame(selectedBox(), preset)
                     if (sceneArmed) pumpQueue()
+                    if ((frameSelected || refitSelected) && selected != 0L) {
+                        refitSelected = false
+                        frame(selectedBox(), preset)
+                    }
                 }
                 result.success(null)
             }
@@ -363,10 +367,12 @@ class FilamentPlatformView(
         }
         Thread {
             try {
-                val plan = plan(File(root))
+                val plan = plan(File(root), ticket)
                 renderHandler.post {
                     if (!destroyed && ticket == generation.get() && loadingRoot == root) begin(plan)
                 }
+            } catch (_: CancelledLoad) {
+                // Back already bumped the generation. Do not plan or begin.
             } catch (error: Exception) {
                 renderHandler.post {
                     if (!destroyed && ticket == generation.get()) {
@@ -386,7 +392,11 @@ class FilamentPlatformView(
         return if (info.totalMem <= threeGiB) 96L * 1024 * 1024 else 256L * 1024 * 1024
     }
 
-    private fun plan(root: File): LoadPlan {
+    private fun plan(root: File, ticket: Int): LoadPlan {
+        fun live() {
+            if (destroyed || ticket != generation.get()) throw CancelledLoad()
+        }
+        live()
         val budget = deviceBudget()
         val lod0 = File(root, "mesh/lod0.glb")
         val lod0Bytes = if (lod0.isFile) lod0.length() else 0L
@@ -407,6 +417,7 @@ class FilamentPlatformView(
         }?.toList() ?: emptyList()
         val elems = ArrayList<ElementFile>()
         for (file in elementGlbs) {
+            live()
             val parsed = readGeoms(file)
             for (geom in parsed) {
                 geomsZ[geom.id] = geom
@@ -457,14 +468,11 @@ class FilamentPlatformView(
                 if (id !in covered && id !in deferredFiles) proxyIds.add(id)
             }
         }
+        live()
         val standIn = proxyIds.toSet()
         val span = SceneBounds.span(SceneBounds.union(geomsZ.values, standIn))
-        for (id in standIn) {
-            val geom = geomsZ[id] ?: continue
-            val clamped = SceneBounds.clamp(geom, span)
-            geomsZ[id] = clamped
-            geomsU[id] = clamped.upright()
-        }
+        // Records keep the full element bounds so a selected stand-in is framed
+        // to the mesh, not to the clamped orange box.
         val heavy = geomsZ.size > 80 || (lod0.isFile && lod0Bytes >= 8L * 1024 * 1024)
         val previewGeoms = ArrayList<ElementGeom>()
         if (heavy) {
@@ -475,12 +483,14 @@ class FilamentPlatformView(
         val standGeoms = ArrayList<ElementGeom>()
         for (id in standIn) {
             val geom = geomsZ[id] ?: continue
-            standGeoms.add(geom)
+            standGeoms.add(SceneBounds.clamp(geom, span))
         }
+        live()
         val preview = ProxyBoxes.build(previewGeoms)
         val proxy = ProxyBoxes.build(standGeoms)
         val partial = (lod0.isFile && !useLod0) || standIn.isNotEmpty()
         if (gpu.isEmpty() && proxy == null && preview == null) error("mesh/lod0.glb was not found")
+        live()
         Log.i(
             TAG,
             "plan lod0=$useLod0 files=${gpu.size} standIns=${standIn.size} " +
@@ -638,6 +648,10 @@ class FilamentPlatformView(
         applyRootTurn(asset)
         index(asset)
         rememberBounds(asset)
+        if (!proxy && refitSelected && selected != 0L) {
+            refitSelected = false
+            frame(selectedBox(), preset)
+        }
         val started = try {
             resourceLoader.asyncBeginLoad(asset)
         } catch (error: Exception) {
@@ -695,12 +709,6 @@ class FilamentPlatformView(
                 "standIns" to pendingStandIns(),
             ),
         )
-        val drop = elementByEntity.filterValues { it in ids }.keys.toList()
-        for (entity in drop) {
-            if (inScene.remove(entity)) scene.remove(entity)
-            elementByEntity.remove(entity)
-            originals.remove(entity)
-        }
         if (file !in gpuQueue) gpuQueue.add(file)
     }
 
@@ -785,7 +793,7 @@ class FilamentPlatformView(
         return assetLoader.createAsset(buffer)
     }
 
-    private fun index(asset: FilamentAsset) {
+    private fun index(asset: FilamentAsset): List<Long> {
         val found = ArrayList<Long>()
         val proxy = asset in proxyAssets
         for (entity in asset.entities) {
@@ -797,8 +805,50 @@ class FilamentPlatformView(
                 if (proxy) proxyEntities.add(entity) else found.add(id)
             }
         }
-        if (!proxy) retireProxies(found)
+        if (!proxy) {
+            retireProxies(found)
+            adoptAssetBounds(asset, found)
+        }
         releaseRetiredProxies()
+        return found
+    }
+
+    /** The loaded GLB can be larger than the accessor box we framed. Keep the union. */
+    private fun adoptAssetBounds(asset: FilamentAsset, ids: List<Long>) {
+        if (ids.size != 1) return
+        val box = uprightAssetBox(asset) ?: return
+        if (ids[0] == selected && adoptBox(ids[0], box)) refitSelected = true
+    }
+
+    private fun uprightAssetBox(asset: FilamentAsset): FloatArray? {
+        val center = asset.boundingBox.center
+        val half = asset.boundingBox.halfExtent
+        if (half[0] + half[1] + half[2] <= 0f) return null
+        val min = floatArrayOf(center[0] - half[0], center[1] - half[1], center[2] - half[2])
+        val max = floatArrayOf(center[0] + half[0], center[1] + half[1], center[2] + half[2])
+        val upright = ElementGeom(0L, min, max, floatArrayOf(1f, 1f, 1f, 1f)).upright()
+        return floatArrayOf(
+            upright.min[0], upright.min[1], upright.min[2],
+            upright.max[0], upright.max[1], upright.max[2],
+        )
+    }
+
+    private fun adoptBox(id: Long, box: FloatArray): Boolean {
+        val current = records[id] ?: return false
+        val recorded = floatArrayOf(
+            current.min[0], current.min[1], current.min[2],
+            current.max[0], current.max[1], current.max[2],
+        )
+        val merged = SceneBounds.enclosing(recorded, box)
+        val grew = merged[0] < recorded[0] - 0.01f || merged[1] < recorded[1] - 0.01f ||
+            merged[2] < recorded[2] - 0.01f || merged[3] > recorded[3] + 0.01f ||
+            merged[4] > recorded[4] + 0.01f || merged[5] > recorded[5] + 0.01f
+        if (!grew) return false
+        records[id] = current.copy(
+            min = floatArrayOf(merged[0], merged[1], merged[2]),
+            max = floatArrayOf(merged[3], merged[4], merged[5]),
+        )
+        return true
     }
 
     /** Drop preview boxes once their elements have a real mesh. Stand-ins stay. */
@@ -854,17 +904,37 @@ class FilamentPlatformView(
     private fun retireProxies(ids: Collection<Long>) {
         if (ids.isEmpty()) return
         replaced.addAll(ids)
-        if (proxyEntities.isEmpty()) return
         val wanted = ids.toHashSet()
         val drop = ArrayList<Int>()
         for ((entity, id) in elementByEntity) {
             if (entity in proxyEntities && id in wanted) drop.add(entity)
         }
-        for (entity in drop) {
-            if (inScene.remove(entity)) scene.remove(entity)
-            elementByEntity.remove(entity)
-            originals.remove(entity)
-            proxyEntities.remove(entity)
+        for (asset in proxyAssets.toList()) {
+            for (entity in asset.entities) {
+                if (entity == 0 || entity in drop) continue
+                val id = elementByEntity[entity]
+                    ?: elementId(asset.getExtras(entity))
+                    ?: asset.getName(entity)?.toLongOrNull()
+                if (id != null && id in wanted) drop.add(entity)
+            }
+        }
+        for (entity in drop) hideProxyEntity(entity)
+        if (drop.isNotEmpty()) {
+            Log.i(TAG, "cleared proxy entities=${drop.size} elements=${wanted.size}")
+        }
+    }
+
+    private fun hideProxyEntity(entity: Int) {
+        if (inScene.remove(entity)) scene.remove(entity)
+        elementByEntity.remove(entity)
+        originals.remove(entity)
+        proxyEntities.remove(entity)
+        val tint = tinted.remove(entity)
+        if (tint != null) {
+            try {
+                engine.destroyMaterialInstance(tint)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -930,6 +1000,10 @@ class FilamentPlatformView(
         }
         if (added) applyVisibility()
         releaseRetiredProxies()
+        if (refitSelected && selected != 0L) {
+            refitSelected = false
+            frame(selectedBox(), preset)
+        }
     }
 
     private fun indexEntity(asset: FilamentAsset, entity: Int) {
@@ -941,7 +1015,13 @@ class FilamentPlatformView(
                 return
             }
             elementByEntity[entity] = id
-            if (asset in proxyAssets) proxyEntities.add(entity) else retireProxies(listOf(id))
+            if (asset in proxyAssets) {
+                proxyEntities.add(entity)
+            } else {
+                retireProxies(listOf(id))
+                val visual = worldBoxOf(entity)
+                if (visual != null && adoptBox(id, visual) && id == selected) refitSelected = true
+            }
         }
     }
 
@@ -1034,13 +1114,16 @@ class FilamentPlatformView(
         val pose = CameraFit.pose(bounds, cameraPreset, aspect)
         framedBox = bounds.copyOf()
         framedAspect = aspect
-        near = max(0.02, pose.radius / 200.0)
-        far = max(pose.distance.toDouble() * 4.0, pose.distance.toDouble() + pose.radius * 8.0)
+        near = max(0.02, pose.radius / 4000.0)
+        far = max(pose.distance.toDouble() * 80.0, pose.radius * 80.0)
+        if (far < 500.0) far = 500.0
+        val zoom = max(pose.distance * 0.035f, 0.25f)
         manipulator = Manipulator.Builder()
             .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
             .targetPosition(pose.targetX, pose.targetY, pose.targetZ)
             .orbitHomePosition(pose.eyeX, pose.eyeY, pose.eyeZ)
             .upVector(0f, 1f, 0f)
+            .zoomSpeed(zoom)
             .fovDegrees(CameraFit.fovDegrees.toFloat())
             .fovDirection(Manipulator.Fov.VERTICAL)
             .farPlane(far.toFloat())
@@ -1063,7 +1146,65 @@ class FilamentPlatformView(
 
     private fun selectedBox(): FloatArray? {
         val geom = records[selected] ?: return allBox()
-        return floatArrayOf(geom.min[0], geom.min[1], geom.min[2], geom.max[0], geom.max[1], geom.max[2])
+        val recorded = floatArrayOf(
+            geom.min[0], geom.min[1], geom.min[2],
+            geom.max[0], geom.max[1], geom.max[2],
+        )
+        val visual = renderedBox(selected) ?: return recorded
+        return SceneBounds.enclosing(recorded, visual)
+    }
+
+    /** World-space box of whatever is currently drawn for [id], proxy or mesh. */
+    private fun renderedBox(id: Long): FloatArray? {
+        var box: FloatArray? = null
+        for ((entity, entityId) in elementByEntity) {
+            if (entityId != id) continue
+            val part = worldBoxOf(entity) ?: continue
+            val soFar = box
+            box = if (soFar == null) part else SceneBounds.enclosing(soFar, part)
+        }
+        return box
+    }
+
+    private fun worldBoxOf(entity: Int): FloatArray? {
+        if (!engineAlive) return null
+        val renderable = engine.renderableManager
+        val instance = renderable.getInstance(entity)
+        if (instance == 0) return null
+        val local = renderable.getAxisAlignedBoundingBox(instance)
+        val transform = engine.transformManager
+        val node = transform.getInstance(entity)
+        if (node == 0) return null
+        val matrix = FloatArray(16)
+        transform.getWorldTransform(node, matrix)
+        val center = local.center
+        val half = local.halfExtent
+        var minX = Float.POSITIVE_INFINITY
+        var minY = Float.POSITIVE_INFINITY
+        var minZ = Float.POSITIVE_INFINITY
+        var maxX = Float.NEGATIVE_INFINITY
+        var maxY = Float.NEGATIVE_INFINITY
+        var maxZ = Float.NEGATIVE_INFINITY
+        for (sx in intArrayOf(-1, 1)) {
+            for (sy in intArrayOf(-1, 1)) {
+                for (sz in intArrayOf(-1, 1)) {
+                    val x = center[0] + sx * half[0]
+                    val y = center[1] + sy * half[1]
+                    val z = center[2] + sz * half[2]
+                    val wx = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]
+                    val wy = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]
+                    val wz = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]
+                    minX = minOf(minX, wx)
+                    minY = minOf(minY, wy)
+                    minZ = minOf(minZ, wz)
+                    maxX = maxOf(maxX, wx)
+                    maxY = maxOf(maxY, wy)
+                    maxZ = maxOf(maxZ, wz)
+                }
+            }
+        }
+        if (minX == Float.POSITIVE_INFINITY) return null
+        return floatArrayOf(minX, minY, minZ, maxX, maxY, maxZ)
     }
 
     private fun updateProjection() {
@@ -1075,6 +1216,10 @@ class FilamentPlatformView(
     private fun onTouch(event: MotionEvent): Boolean {
         if (!engineAlive || destroyed) return true
         gesture?.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            manipulator?.scroll(event.x.toInt(), event.y.toInt(), -wheel * 4f)
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x
@@ -1322,6 +1467,8 @@ class FilamentPlatformView(
             }
         }
     }
+
+    private class CancelledLoad : RuntimeException()
 
     companion object {
         private const val TAG = "FbvFilament"

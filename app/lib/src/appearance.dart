@@ -38,7 +38,7 @@ class AppearanceMenu extends StatelessWidget {
     if (scope == null) return const SizedBox.shrink();
     final strings = scope.strings;
     return PopupMenuButton<String>(
-      tooltip: strings.theme,
+      tooltip: strings.menu,
       icon: const Icon(Icons.more_vert),
       onSelected: (value) {
         if (value == 'theme') scope.onTheme();

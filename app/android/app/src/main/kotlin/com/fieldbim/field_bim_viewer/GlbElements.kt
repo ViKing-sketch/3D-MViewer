@@ -45,6 +45,14 @@ object GlbElements {
         val meshes = root.optJSONArray("meshes")
         val accessors = root.optJSONArray("accessors")
         val materials = root.optJSONArray("materials")
+        val parent = IntArray(nodes.length()) { -1 }
+        for (i in 0 until nodes.length()) {
+            val children = nodes.optJSONObject(i)?.optJSONArray("children") ?: continue
+            for (c in 0 until children.length()) {
+                val child = children.optInt(c, -1)
+                if (child in parent.indices) parent[child] = i
+            }
+        }
         val found = ArrayList<ElementGeom>()
         for (i in 0 until nodes.length()) {
             val node = nodes.optJSONObject(i) ?: continue
@@ -52,17 +60,122 @@ object GlbElements {
             if (!node.has("mesh") || meshes == null || accessors == null) continue
             val mesh = meshes.optJSONObject(node.getInt("mesh")) ?: continue
             val prims = mesh.optJSONArray("primitives") ?: continue
-            if (prims.length() == 0) continue
-            val prim = prims.getJSONObject(0)
-            val attrs = prim.optJSONObject("attributes") ?: continue
-            if (!attrs.has("POSITION")) continue
-            val acc = accessors.optJSONObject(attrs.getInt("POSITION")) ?: continue
-            val min = vec3(acc.optJSONArray("min")) ?: continue
-            val max = vec3(acc.optJSONArray("max")) ?: continue
-            val color = colorOf(materials, prim.optInt("material", -1))
-            found.add(ElementGeom(id, min, max, color))
+            val primBounds = ArrayList<Pair<FloatArray, FloatArray>>()
+            var color = floatArrayOf(0.7f, 0.72f, 0.74f, 1f)
+            for (p in 0 until prims.length()) {
+                val prim = prims.optJSONObject(p) ?: continue
+                val attrs = prim.optJSONObject("attributes") ?: continue
+                if (!attrs.has("POSITION")) continue
+                val acc = accessors.optJSONObject(attrs.getInt("POSITION")) ?: continue
+                val pMin = vec3(acc.optJSONArray("min")) ?: continue
+                val pMax = vec3(acc.optJSONArray("max")) ?: continue
+                if (primBounds.isEmpty()) color = colorOf(materials, prim.optInt("material", -1))
+                primBounds.add(pMin to pMax)
+            }
+            val chain = ArrayList<FloatArray>()
+            var walk = i
+            var guard = 0
+            while (walk >= 0 && guard++ < 64) {
+                val current = nodes.optJSONObject(walk) ?: break
+                val matrix = nodeMatrix(current)
+                if (matrix != null) chain.add(matrix)
+                walk = parent[walk]
+            }
+            val turned = elementBounds(primBounds, chain) ?: continue
+            found.add(ElementGeom(id, turned.first, turned.second, color))
         }
         return found
+    }
+
+    /**
+     * Unions every primitive, then applies [chain] from the node outward.
+     * Unit tests call this directly because the JVM android.jar stubs org.json.
+     */
+    fun elementBounds(
+        primitives: List<Pair<FloatArray, FloatArray>>,
+        chain: List<FloatArray>,
+    ): Pair<FloatArray, FloatArray>? {
+        if (primitives.isEmpty()) return null
+        var min = primitives[0].first.copyOf()
+        var max = primitives[0].second.copyOf()
+        for (index in 1 until primitives.size) {
+            val merged = unionAabb(min, max, primitives[index].first, primitives[index].second)
+            min = merged.first
+            max = merged.second
+        }
+        for (matrix in chain) {
+            val turned = transformAabb(matrix, min, max)
+            min = turned.first
+            max = turned.second
+        }
+        return min to max
+    }
+
+    private fun unionAabb(
+        min: FloatArray,
+        max: FloatArray,
+        otherMin: FloatArray,
+        otherMax: FloatArray,
+    ): Pair<FloatArray, FloatArray> {
+        return floatArrayOf(
+            minOf(min[0], otherMin[0]),
+            minOf(min[1], otherMin[1]),
+            minOf(min[2], otherMin[2]),
+        ) to floatArrayOf(
+            maxOf(max[0], otherMax[0]),
+            maxOf(max[1], otherMax[1]),
+            maxOf(max[2], otherMax[2]),
+        )
+    }
+
+    private fun nodeMatrix(node: JSONObject): FloatArray? {
+        val matrix = node.optJSONArray("matrix")
+        if (matrix != null && matrix.length() >= 16) {
+            return FloatArray(16) { matrix.getDouble(it).toFloat() }
+        }
+        val translation = vec3(node.optJSONArray("translation"))
+        val scale = vec3(node.optJSONArray("scale"))
+        if (translation == null && scale == null) return null
+        val sx = scale?.get(0) ?: 1f
+        val sy = scale?.get(1) ?: 1f
+        val sz = scale?.get(2) ?: 1f
+        val tx = translation?.get(0) ?: 0f
+        val ty = translation?.get(1) ?: 0f
+        val tz = translation?.get(2) ?: 0f
+        return floatArrayOf(
+            sx, 0f, 0f, 0f,
+            0f, sy, 0f, 0f,
+            0f, 0f, sz, 0f,
+            tx, ty, tz, 1f,
+        )
+    }
+
+    private fun transformAabb(matrix: FloatArray, min: FloatArray, max: FloatArray): Pair<FloatArray, FloatArray> {
+        var minX = Float.POSITIVE_INFINITY
+        var minY = Float.POSITIVE_INFINITY
+        var minZ = Float.POSITIVE_INFINITY
+        var maxX = Float.NEGATIVE_INFINITY
+        var maxY = Float.NEGATIVE_INFINITY
+        var maxZ = Float.NEGATIVE_INFINITY
+        val xs = floatArrayOf(min[0], max[0])
+        val ys = floatArrayOf(min[1], max[1])
+        val zs = floatArrayOf(min[2], max[2])
+        for (x in xs) {
+            for (y in ys) {
+                for (z in zs) {
+                    val wx = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]
+                    val wy = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]
+                    val wz = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]
+                    minX = minOf(minX, wx)
+                    minY = minOf(minY, wy)
+                    minZ = minOf(minZ, wz)
+                    maxX = maxOf(maxX, wx)
+                    maxY = maxOf(maxY, wy)
+                    maxZ = maxOf(maxZ, wz)
+                }
+            }
+        }
+        return floatArrayOf(minX, minY, minZ) to floatArrayOf(maxX, maxY, maxZ)
     }
 
     fun elementId(node: JSONObject): Long? {

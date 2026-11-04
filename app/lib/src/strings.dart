@@ -59,6 +59,10 @@ class S {
   String get showAll => russian ? 'Показать всё' : 'Show all';
   String get isolate => russian ? 'Изолировать' : 'Isolate';
   String get xray => russian ? 'Рентген' : 'X-ray';
+  String get xrayHint => russian
+      ? 'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.'
+      : 'Other elements turn translucent. The selection stays solid.';
+  String get menu => russian ? 'Меню' : 'Menu';
   String get viewFront => russian ? 'Спереди' : 'Front';
   String get viewBack => russian ? 'Сзади' : 'Back';
   String get viewLeft => russian ? 'Слева' : 'Left';

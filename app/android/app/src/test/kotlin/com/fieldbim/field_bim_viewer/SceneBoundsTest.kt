@@ -26,6 +26,19 @@ class SceneBoundsTest {
     }
 
     @Test
+    fun enclosingKeepsWhicheverBoxIsLarger() {
+        val proxy = floatArrayOf(0f, 0f, 0f, 2f, 2f, 2f)
+        val mesh = floatArrayOf(-8f, 0f, -1f, 8f, 6f, 1f)
+        val box = SceneBounds.enclosing(proxy, mesh)
+        assertEquals(-8f, box[0], 0.001f)
+        assertEquals(0f, box[1], 0.001f)
+        assertEquals(-1f, box[2], 0.001f)
+        assertEquals(8f, box[3], 0.001f)
+        assertEquals(6f, box[4], 0.001f)
+        assertEquals(2f, box[5], 0.001f)
+    }
+
+    @Test
     fun clampKeepsCenterAndCapsSpan() {
         val huge = geom(2, -5000f, 0f, 0f, 5000f, 2f, 2f)
         val clamped = SceneBounds.clamp(huge, 10f)
