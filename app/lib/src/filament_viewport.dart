@@ -61,6 +61,7 @@ class FilamentViewport extends StatefulWidget {
 class FilamentViewportState extends State<FilamentViewport> {
   FilamentCommands? _commands;
   String? _status;
+  String? _statusCode;
   int _appliedFrame = 0;
 
   Future<void> fitAll() =>
@@ -164,7 +165,10 @@ class FilamentViewportState extends State<FilamentViewport> {
     } else {
       text = raw['message']?.toString() ?? code;
     }
-    setState(() => _status = text);
+    setState(() {
+      _statusCode = code;
+      _status = text;
+    });
     widget.onStatus?.call(text);
   }
 
@@ -197,23 +201,38 @@ class FilamentViewportState extends State<FilamentViewport> {
         selectedName: widget.selectedName,
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final showStatus = _status != null &&
+        _statusCode != 'ready' &&
+        _statusCode != 'idle';
+    return Stack(
+      fit: StackFit.expand,
       children: [
-        if (_status != null)
-          Material(
-            color: Theme.of(context).colorScheme.surface,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Text(
-                _status!,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
+        ClipRect(child: _platformView(context)),
+        if (showStatus)
+          Positioned(
+            left: 8,
+            right: 8,
+            top: 48,
+            child: IgnorePointer(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Material(
+                  color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      _status!,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        Expanded(child: ClipRect(child: _platformView(context))),
       ],
     );
   }

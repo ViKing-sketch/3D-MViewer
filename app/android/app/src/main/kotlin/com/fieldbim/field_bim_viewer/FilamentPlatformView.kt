@@ -1458,24 +1458,33 @@ class FilamentPlatformView(
 
     private fun pick(x: Float, y: Float) {
         val vp = view.viewport
-        val width = if (vp.width > 1) vp.width else viewportW
-        val height = if (vp.height > 1) vp.height else viewportH
-        if (width <= 1 || height <= 1) return
-        val px = (vp.left + x.toInt()).coerceIn(vp.left, vp.left + width - 1)
-        val py = (vp.bottom + height - y.toInt()).coerceIn(vp.bottom, vp.bottom + height - 1)
+        val ready = vp.width > 1 && vp.height > 1
+        val left = if (ready) vp.left else 0
+        val bottom = if (ready) vp.bottom else 0
+        val width = if (ready) vp.width else viewportW
+        val height = if (ready) vp.height else viewportH
+        val coords = PickCoords.resolve(left, bottom, width, height, viewportH, x, y)
+        if (coords == null) {
+            val reason = if (width <= 1 || height <= 1) "unready" else "outside"
+            Log.i(
+                TAG,
+                "pick miss reason=$reason x=$x y=$y viewport=$left,$bottom ${width}x$height",
+            )
+            return
+        }
+        val px = coords[0]
+        val py = coords[1]
         val clip = if (sectionActive) liveClip else null
         val bounds = if (clip != null) sectionBounds() else null
         val projection = if (clip != null) camera.getProjectionMatrix(DoubleArray(16)) else null
         val model = if (clip != null) camera.getModelMatrix(DoubleArray(16)) else null
-        val vpLeft = vp.left
-        val vpBottom = vp.bottom
         view.pick(px, py, renderHandler, View.OnPickCallback { result ->
             if (destroyed) return@OnPickCallback
             var id = elementByEntity[result.renderable] ?: 0L
             val depth = result.depth
             val frag = result.fragCoords
-            val fragX = if (frag.size >= 1) frag[0] - vpLeft else x
-            val fragY = if (frag.size >= 2) frag[1] - vpBottom else height - y
+            val fragX = if (frag.size >= 1) frag[0] else px.toFloat()
+            val fragY = if (frag.size >= 2) frag[1] else py.toFloat()
             var world: FloatArray? = null
             var rejected = false
             if (id != 0L && clip != null && bounds != null && projection != null && model != null &&
@@ -1487,12 +1496,17 @@ class FilamentPlatformView(
                     id = 0L
                 }
             }
+            val reason = when {
+                rejected -> "section"
+                id != 0L -> "hit"
+                result.renderable != 0 -> "unmapped"
+                else -> "miss"
+            }
             val worldText = world?.joinToString(",") ?: "none"
-            val fragText = if (frag.isEmpty()) "none" else frag.joinToString(",")
             Log.i(
                 TAG,
-                "pick entity=${result.renderable} id=$id depth=$depth frag=$fragText " +
-                    "adj=$fragX,$fragY world=$worldText reject=$rejected",
+                "pick $reason element=$id renderable=${result.renderable} depth=$depth " +
+                    "px=$px py=$py world=$worldText",
             )
             if (id != 0L && deferred.containsKey(id)) {
                 ensureSelected(id)

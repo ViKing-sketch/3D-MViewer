@@ -181,13 +181,15 @@ void main() {
     expect(find.text('Дерево'), findsOneWidget);
     expect(find.text('Выберите элемент'), findsOneWidget);
     expect(find.byTooltip('Меню'), findsOneWidget);
-    expect(
-      find.byTooltip(
-        'Остальные элементы становятся полупрозрачными. Выбранный остаётся сплошным.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.byTooltip('Рентген'), findsOneWidget);
+    expect(find.byTooltip('Срез'), findsOneWidget);
+    expect(find.byTooltip('Изолировать'), findsOneWidget);
+    expect(find.byTooltip('Камера по умолчанию'), findsOneWidget);
+    await tester.tap(find.byTooltip('Действия'));
+    await tester.pumpAndSettle();
     expect(find.text('Показать всё'), findsOneWidget);
+    await tester.tap(find.text('Показать всё'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Дерево'));
     await tester.pumpAndSettle();
@@ -281,7 +283,7 @@ void main() {
     await tester.ensureVisible(toggle);
     await tester.tap(toggle);
     await tester.pump();
-    expect(find.byTooltip(const S(true).sectionHint), findsOneWidget);
+    expect(find.byTooltip(const S(true).section), findsOneWidget);
     expect(find.textContaining('не зависит от зума'), findsNothing);
     expect(find.byKey(const ValueKey('section-offset')), findsOneWidget);
     expect(find.byKey(const ValueKey('section-flip')), findsOneWidget);

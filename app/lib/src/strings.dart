@@ -91,6 +91,8 @@ class S {
   String get viewTop => russian ? 'Сверху' : 'Top';
   String get viewBottom => russian ? 'Снизу' : 'Bottom';
   String get cameraViews => russian ? 'Виды' : 'Views';
+  String get cameraHome => russian ? 'Камера по умолчанию' : 'Default camera';
+  String get actions => russian ? 'Действия' : 'Actions';
   String get loadingMesh => russian ? 'Загрузка меша…' : 'Loading mesh…';
 
   String get closingModel =>

@@ -51,7 +51,6 @@ class _ModelPageState extends State<ModelPage>
   void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
   final _portraitKey = GlobalKey();
-  final _renderBarKey = GlobalKey();
   final _sheet = DraggableScrollableController();
   double _fitBottomInset = 0;
   int _insetTries = 0;
@@ -213,8 +212,7 @@ class _ModelPageState extends State<ModelPage>
 
   void _syncFitInset() {
     final stack = _portraitKey.currentContext?.size?.height;
-    final bar = _renderBarKey.currentContext?.size?.height ?? 0;
-    if (stack == null || stack <= bar + 1) {
+    if (stack == null || stack <= 1) {
       // The sheet is not laid out yet. Try the next frames, then stop.
       if (_portraitKey.currentContext != null && _insetTries < 8) {
         _insetTries++;
@@ -224,8 +222,8 @@ class _ModelPageState extends State<ModelPage>
     }
     _insetTries = 0;
     final sheet = _sheet.isAttached ? _sheet.size : 0.22;
-    final overlap = (sheet * stack).clamp(0.0, stack - bar);
-    _pushFitInset(overlap / (stack - bar));
+    final overlap = (sheet * stack).clamp(0.0, stack);
+    _pushFitInset(overlap / stack);
   }
 
   void _pushFitInset(double inset) {
@@ -298,58 +296,105 @@ class _ModelPageState extends State<ModelPage>
     return null;
   }
 
-  Widget _renderBar(S strings) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 0,
-        children: [
-          _sectionButton(strings),
-          TextButton(
-            onPressed: () => _viewport.currentState?.fitAll(),
-            child: Text(strings.fitAll),
+  Widget _modelTools(S strings) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(20),
+        color: scheme.surface.withValues(alpha: 0.92),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _toolButton(
+                key: const ValueKey('section-toggle'),
+                tooltip: strings.section,
+                icon: Icons.content_cut,
+                selected: _section.enabled,
+                onPressed: _toggleSection,
+              ),
+              _toolButton(
+                tooltip: strings.xray,
+                icon: Icons.blur_on,
+                selected: _xray,
+                onPressed: _toggleXray,
+              ),
+              _toolButton(
+                tooltip: strings.isolate,
+                icon: Icons.filter_center_focus,
+                selected: _isolated.isNotEmpty,
+                onPressed: _isolateSelected,
+              ),
+              _toolButton(
+                tooltip: strings.cameraHome,
+                icon: Icons.restart_alt,
+                onPressed: () => _viewport.currentState?.setCamera('iso'),
+              ),
+              PopupMenuButton<String>(
+                tooltip: strings.actions,
+                padding: EdgeInsets.zero,
+                iconSize: 20,
+                onSelected: _onToolAction,
+                itemBuilder: (context) => [
+                  PopupMenuItem(value: 'fit', child: Text(strings.fitAll)),
+                  PopupMenuItem(value: 'fit-selected', child: Text(strings.fitSelected)),
+                  PopupMenuItem(value: 'hide', child: Text(strings.hide)),
+                  PopupMenuItem(value: 'show', child: Text(strings.showAll)),
+                  PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
+                  PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
+                  PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
+                  PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
+                  PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
+                  PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
+                ],
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.fitSelected(),
-            child: Text(strings.fitSelected),
-          ),
-          TextButton(onPressed: _hideSelected, child: Text(strings.hide)),
-          TextButton(onPressed: _showAll, child: Text(strings.showAll)),
-          TextButton(onPressed: _isolateSelected, child: Text(strings.isolate)),
-          Tooltip(
-            message: strings.xrayHint,
-            child: TextButton(
-              onPressed: _toggleXray,
-              child: Text(strings.xray),
-            ),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('front'),
-            child: Text(strings.viewFront),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('back'),
-            child: Text(strings.viewBack),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('left'),
-            child: Text(strings.viewLeft),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('right'),
-            child: Text(strings.viewRight),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('top'),
-            child: Text(strings.viewTop),
-          ),
-          TextButton(
-            onPressed: () => _viewport.currentState?.setCamera('bottom'),
-            child: Text(strings.viewBottom),
-          ),
-        ],
+        ),
       ),
+    );
+  }
+
+  void _onToolAction(String value) {
+    final view = _viewport.currentState;
+    if (value == 'fit') {
+      view?.fitAll();
+    } else if (value == 'fit-selected') {
+      view?.fitSelected();
+    } else if (value == 'hide') {
+      _hideSelected();
+    } else if (value == 'show') {
+      _showAll();
+    } else {
+      view?.setCamera(value);
+    }
+  }
+
+  Widget _toolButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+    bool selected = false,
+    Key? key,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      isSelected: selected,
+      visualDensity: VisualDensity.compact,
+      style: IconButton.styleFrom(
+        backgroundColor: selected ? scheme.primary : null,
+        foregroundColor: selected ? scheme.onPrimary : scheme.onSurface,
+        minimumSize: const Size(36, 36),
+        padding: const EdgeInsets.all(6),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: onPressed,
+      icon: Icon(icon, size: 20),
     );
   }
 
@@ -528,14 +573,7 @@ class _ModelPageState extends State<ModelPage>
           child: Row(
             children: [
               SizedBox(width: 320, child: _tree(context)),
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(child: viewport),
-                    _renderBar(strings),
-                  ],
-                ),
-              ),
+              Expanded(child: _tooledViewport(viewport, strings)),
               SizedBox(width: 340, child: _properties(context, selected)),
             ],
           ),
@@ -554,12 +592,8 @@ class _ModelPageState extends State<ModelPage>
     return Stack(
       key: _portraitKey,
       children: [
-        Column(
-          children: [
-            KeyedSubtree(key: _renderBarKey, child: _renderBar(strings)),
-            Expanded(child: viewport),
-          ],
-        ),
+        Positioned.fill(child: viewport),
+        Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
         DraggableScrollableSheet(
           controller: _sheet,
           initialChildSize: 0.22,
@@ -596,8 +630,7 @@ class _ModelPageState extends State<ModelPage>
             .toDouble();
         return Row(
           children: [
-            _cameraRail(strings),
-            Expanded(child: viewport),
+            Expanded(child: _tooledViewport(viewport, strings)),
             SizedBox(width: side, child: _properties(context, selected)),
           ],
         );
@@ -605,70 +638,12 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _cameraRail(S strings) {
-    final style = IconButton.styleFrom(
-      padding: EdgeInsets.zero,
-      minimumSize: const Size(40, 40),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    return SizedBox(
-      width: 48,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        children: [
-          _sectionIcon(strings, style),
-          IconButton(
-            tooltip: strings.fitAll,
-            style: style,
-            onPressed: () => _viewport.currentState?.fitAll(),
-            icon: const Icon(Icons.fit_screen),
-          ),
-          IconButton(
-            tooltip: strings.fitSelected,
-            style: style,
-            onPressed: () => _viewport.currentState?.fitSelected(),
-            icon: const Icon(Icons.center_focus_strong),
-          ),
-          IconButton(
-            tooltip: strings.hide,
-            style: style,
-            onPressed: _hideSelected,
-            icon: const Icon(Icons.visibility_off_outlined),
-          ),
-          IconButton(
-            tooltip: strings.showAll,
-            style: style,
-            onPressed: _showAll,
-            icon: const Icon(Icons.visibility_outlined),
-          ),
-          IconButton(
-            tooltip: strings.isolate,
-            style: style,
-            onPressed: _isolateSelected,
-            icon: const Icon(Icons.filter_center_focus),
-          ),
-          IconButton(
-            tooltip: strings.xrayHint,
-            style: style,
-            onPressed: _toggleXray,
-            icon: const Icon(Icons.blur_on),
-          ),
-          PopupMenuButton<String>(
-            tooltip: strings.cameraViews,
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.videocam_outlined),
-            onSelected: (preset) => _viewport.currentState?.setCamera(preset),
-            itemBuilder: (context) => [
-              PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
-              PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
-              PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
-              PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
-              PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
-              PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
-            ],
-          ),
-        ],
-      ),
+  Widget _tooledViewport(Widget viewport, S strings) {
+    return Stack(
+      children: [
+        Positioned.fill(child: viewport),
+        Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
+      ],
     );
   }
 
@@ -724,41 +699,6 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _sectionButton(S strings) {
-    final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: strings.sectionHint,
-      child: FilledButton.tonal(
-        key: const ValueKey('section-toggle'),
-        onPressed: _toggleSection,
-        style: FilledButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          backgroundColor: _section.enabled ? scheme.primary : scheme.primaryContainer,
-          foregroundColor: _section.enabled ? scheme.onPrimary : scheme.onPrimaryContainer,
-        ),
-        child: Text(strings.section),
-      ),
-    );
-  }
-
-  Widget _sectionIcon(S strings, ButtonStyle style) {
-    final scheme = Theme.of(context).colorScheme;
-    return IconButton(
-      key: const ValueKey('section-toggle'),
-      tooltip: strings.sectionHint,
-      style: style.copyWith(
-        backgroundColor: WidgetStatePropertyAll(
-          _section.enabled ? scheme.primary : scheme.primaryContainer,
-        ),
-        foregroundColor: WidgetStatePropertyAll(
-          _section.enabled ? scheme.onPrimary : scheme.onPrimaryContainer,
-        ),
-      ),
-      onPressed: _toggleSection,
-      icon: const Icon(Icons.content_cut),
-    );
-  }
-
   Widget _sectionFrame(Widget viewport) {
     if (!_section.enabled) return viewport;
     return LayoutBuilder(
@@ -792,7 +732,7 @@ class _ModelPageState extends State<ModelPage>
       borderRadius: BorderRadius.circular(12),
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.96),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
+        padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
