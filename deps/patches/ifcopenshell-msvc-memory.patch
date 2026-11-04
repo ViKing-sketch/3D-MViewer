@@ -15,7 +15,7 @@ diff --git a/src/ifcgeom/profile_helper.h b/src/ifcgeom/profile_helper.h
  				: xy(p), radius(r) {
  			}
 +
-+			// fbv: Boost 1.92 made optional's converting constructor explicit, so
++			// fbv-msvc-profile-point: Boost 1.92 made optional's converting constructor explicit, so
 +			// {{x, y}, {radius}} is not copy-list-initialized. MSVC 19.44 does not
 +			// treat {radius} as a double either. initializer_list matches the braced
 +			// radius. An unbraced radius uses the arithmetic overload, which is not

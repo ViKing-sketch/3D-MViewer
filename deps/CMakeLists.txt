@@ -218,26 +218,36 @@ if(NOT ifcopenshell_POPULATED)
   FetchContent_Populate(ifcopenshell)
 endif()
 
-# Re-applied on a clean configure. The patch is idempotent: a tree that already
-# contains it is left alone. git apply does not need a git checkout of IfcOpenShell.
+# The extracted tree lives under this repo's build directory. git apply walks
+# up to the parent .git, ignores paths that are not in that checkout, and
+# exits 0 without editing anything. A reverse check then also exits 0, so the
+# sources stay upstream and MSVC never sees the profile_point constructors.
+# Ceiling stops the walk. The marker is the proof the edit landed.
 set(FBV_IOS_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/ifcopenshell-msvc-memory.patch")
+set(FBV_IOS_PROFILE "${ifcopenshell_SOURCE_DIR}/src/ifcgeom/profile_helper.h")
 find_package(Git REQUIRED)
-execute_process(
-  COMMAND "${GIT_EXECUTABLE}" apply --check --reverse --whitespace=nowarn "${FBV_IOS_PATCH}"
-  WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
-  RESULT_VARIABLE FBV_IOS_ALREADY
-  OUTPUT_QUIET ERROR_QUIET
-)
-if(NOT FBV_IOS_ALREADY EQUAL 0)
+file(READ "${FBV_IOS_PROFILE}" FBV_IOS_PROFILE_TEXT)
+if(NOT FBV_IOS_PROFILE_TEXT MATCHES "fbv-msvc-profile-point")
+  # The ceiling has to be the parent. Setting it to the source directory
+  # itself does not stop git from walking up out of that directory.
+  get_filename_component(FBV_IOS_GIT_CEILING "${ifcopenshell_SOURCE_DIR}" DIRECTORY)
+  set(_fbv_git_ceiling "$ENV{GIT_CEILING_DIRECTORIES}")
+  set(ENV{GIT_CEILING_DIRECTORIES} "${FBV_IOS_GIT_CEILING}")
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${FBV_IOS_PATCH}"
     WORKING_DIRECTORY "${ifcopenshell_SOURCE_DIR}"
     RESULT_VARIABLE FBV_IOS_APPLY
     ERROR_VARIABLE FBV_IOS_APPLY_ERR
   )
+  set(ENV{GIT_CEILING_DIRECTORIES} "${_fbv_git_ceiling}")
   if(NOT FBV_IOS_APPLY EQUAL 0)
     message(FATAL_ERROR
       "Failed to patch IfcOpenShell at ${ifcopenshell_SOURCE_DIR} (exit ${FBV_IOS_APPLY}): ${FBV_IOS_APPLY_ERR}")
+  endif()
+  file(READ "${FBV_IOS_PROFILE}" FBV_IOS_PROFILE_TEXT)
+  if(NOT FBV_IOS_PROFILE_TEXT MATCHES "fbv-msvc-profile-point")
+    message(FATAL_ERROR
+      "IfcOpenShell profile_helper.h has no fbv-msvc-profile-point marker after patching ${ifcopenshell_SOURCE_DIR}")
   endif()
   message(STATUS "Patched IfcOpenShell for MSVC profile init and bounded OCCT shape memory")
 else()
