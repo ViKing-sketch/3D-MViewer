@@ -11,6 +11,7 @@ import 'model.dart';
 import 'package_session.dart';
 import 'strings.dart';
 import 'visibility.dart';
+import 'walk_pose.dart';
 
 class ModelPage extends StatefulWidget {
   const ModelPage({super.key, required this.path, required this.strings});
@@ -27,6 +28,7 @@ class _ModelPageState extends State<ModelPage>
   PackageSession? _session;
   List<SpatialNode> _spatial = const [];
   List<ElementInfo> _elements = const [];
+  List<ElementBox> _boxes = const [];
   List<SpecRow> _specs = const [];
   String? _error;
   int? _selectedId;
@@ -56,6 +58,9 @@ class _ModelPageState extends State<ModelPage>
   final _sheet = DraggableScrollableController();
   double _fitBottomInset = 0;
   int _fitToken = 0;
+  bool _walking = false;
+  int _walkToken = 0;
+  WalkPose? _walkPose;
   int _insetTries = 0;
   late final TabController _tabs;
 
@@ -80,6 +85,7 @@ class _ModelPageState extends State<ModelPage>
       _session = session;
       _spatial = session.spatial();
       _elements = session.elements();
+      _boxes = session.elementBoxes();
       _specs = session.specifications();
     } catch (error) {
       _error = error.toString();
@@ -116,6 +122,7 @@ class _ModelPageState extends State<ModelPage>
         _session = session;
         _spatial = session.spatial();
         _elements = session.elements();
+        _boxes = session.elementBoxes();
         _specs = session.specifications();
         _opening = false;
       });
@@ -198,11 +205,16 @@ class _ModelPageState extends State<ModelPage>
         }
         if (hits.length == 1 && _idMatchesFilter(hits.first)) {
           _selectedId = hits.first;
-          if (changed) _frameToken++;
+          if (changed) {
+            _walking = false;
+            _frameToken++;
+          }
         } else if (changed) {
+          _walking = false;
           _fitToken++;
         }
       } else if (changed) {
+        _walking = false;
         _fitToken++;
       }
       _renderRevision++;
@@ -242,6 +254,7 @@ class _ModelPageState extends State<ModelPage>
     setState(() {
       _selectedId = id;
       _xray = true;
+      _walking = false;
       _renderRevision++;
       _frameToken++;
     });
@@ -307,6 +320,7 @@ class _ModelPageState extends State<ModelPage>
       _searchIds = null;
       _xray = false;
       _section = const SectionView();
+      _walking = false;
       _renderRevision++;
       _fitToken++;
     });
@@ -326,7 +340,15 @@ class _ModelPageState extends State<ModelPage>
         _xray = false;
       }
       _renderRevision++;
-      _fitToken++;
+      if (_walking) {
+        final pose = _currentWalkPose();
+        if (_walkPose == null || pose.storeyId != _walkPose!.storeyId) {
+          _walkPose = pose;
+          _walkToken++;
+        }
+      } else {
+        _fitToken++;
+      }
     });
     refresh?.call();
   }
@@ -351,6 +373,7 @@ class _ModelPageState extends State<ModelPage>
           ..clear()
           ..add(id);
       }
+      _walking = false;
       _renderRevision++;
       _fitToken++;
     });
@@ -411,6 +434,93 @@ class _ModelPageState extends State<ModelPage>
     return null;
   }
 
+  void _stopWalk() {
+    if (!_walking) return;
+    setState(() => _walking = false);
+  }
+
+  void _toggleWalk() {
+    setState(() {
+      if (_walking) {
+        _walking = false;
+        return;
+      }
+      _walkPose = _currentWalkPose();
+      _walkToken++;
+      _walking = true;
+    });
+  }
+
+  SpatialNode? _walkStorey() {
+    final selected = _selected;
+    return walkStorey(
+      spatial: _spatial,
+      filterStoreyId: _filter.storeyId,
+      selectedStoreyId: selected?.storeyId,
+    );
+  }
+
+  WalkPose _currentWalkPose() {
+    final storey = _walkStorey();
+    if (storey == null) {
+      return walkOnStorey(
+        storeyId: 0,
+        elevation: 0,
+        boxes: _boxes,
+        anyStorey: true,
+      );
+    }
+    return walkOnStorey(
+      storeyId: storey.id,
+      elevation: storey.hasElevation ? storey.elevation : 0,
+      boxes: _boxes,
+    );
+  }
+
+  WalkCommand get _walkCommand {
+    final pose = _walkPose;
+    if (!_walking || pose == null) {
+      return WalkCommand(enabled: false, token: _walkToken);
+    }
+    final eye = filamentWalk(
+      pose,
+      localOriginOf(_session?.manifest ?? const {}),
+    );
+    return WalkCommand(
+      enabled: true,
+      token: _walkToken,
+      eyeX: eye.eyeX,
+      eyeY: eye.eyeY,
+      eyeZ: eye.eyeZ,
+      lookX: eye.lookX,
+      lookY: eye.lookY,
+      lookZ: eye.lookZ,
+    );
+  }
+
+  Widget _walkBanner(S strings) {
+    final pose = _walkPose;
+    final storey = _walkStorey();
+    if (!_walking || pose == null) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: Material(
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Text(
+            strings.walkHint(
+              storey?.name.isNotEmpty == true ? storey!.name : strings.walk,
+              clear: pose.clearOfSolids,
+            ),
+            key: const ValueKey('walk-hint'),
+            maxLines: 3,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _modelTools(S strings) {
     final scheme = Theme.of(context).colorScheme;
     return Align(
@@ -451,9 +561,19 @@ class _ModelPageState extends State<ModelPage>
                 onPressed: () => unawaited(_openFilter()),
               ),
               _toolButton(
+                key: const ValueKey('walk-toggle'),
+                tooltip: _walking ? strings.walkStop : strings.walk,
+                icon: Icons.directions_walk,
+                selected: _walking,
+                onPressed: _toggleWalk,
+              ),
+              _toolButton(
                 tooltip: strings.cameraHome,
                 icon: Icons.restart_alt,
-                onPressed: () => _viewport.currentState?.setCamera('iso'),
+                onPressed: () {
+                  _stopWalk();
+                  _viewport.currentState?.setCamera('iso');
+                },
               ),
               PopupMenuButton<String>(
                 tooltip: strings.actions,
@@ -461,6 +581,10 @@ class _ModelPageState extends State<ModelPage>
                 iconSize: 20,
                 onSelected: _onToolAction,
                 itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'walk',
+                    child: Text(_walking ? strings.walkStop : strings.walk),
+                  ),
                   PopupMenuItem(value: 'fit', child: Text(strings.fitAll)),
                   PopupMenuItem(
                     value: 'fit-selected',
@@ -488,15 +612,20 @@ class _ModelPageState extends State<ModelPage>
 
   void _onToolAction(String value) {
     final view = _viewport.currentState;
-    if (value == 'fit') {
+    if (value == 'walk') {
+      _toggleWalk();
+    } else if (value == 'fit') {
+      _stopWalk();
       view?.fitAll();
     } else if (value == 'fit-selected') {
+      _stopWalk();
       view?.fitSelected();
     } else if (value == 'hide') {
       _hideSelected();
     } else if (value == 'show') {
       _showAll();
     } else {
+      _stopWalk();
       view?.setCamera(value);
     }
   }
@@ -722,6 +851,8 @@ class _ModelPageState extends State<ModelPage>
       children: [
         Positioned.fill(child: viewport),
         Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
+        if (_walking)
+          Positioned(left: 8, right: 8, top: 46, child: _walkBanner(strings)),
         DraggableScrollableSheet(
           controller: _sheet,
           initialChildSize: 0.22,
@@ -771,6 +902,8 @@ class _ModelPageState extends State<ModelPage>
       children: [
         Positioned.fill(child: viewport),
         Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
+        if (_walking)
+          Positioned(left: 8, right: 8, top: 46, child: _walkBanner(strings)),
       ],
     );
   }
@@ -1204,6 +1337,7 @@ class _ModelPageState extends State<ModelPage>
       renderRevision: _renderRevision,
       frameToken: _frameToken,
       fitToken: _fitToken,
+      walk: _walkCommand,
       bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,

@@ -6,6 +6,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'fts_query.dart';
 import 'model.dart';
+import 'walk_pose.dart';
 import 'sqlite_setup.dart';
 import 'text_bytes.dart';
 import 'zip_store.dart';
@@ -260,6 +261,48 @@ ORDER BY e.id
           guid: packageText(row.columnAt(8)),
         ),
     ];
+  }
+
+  /// World-metre boxes. A null box is omitted. A zero box is kept so the
+  /// walker can ignore an element that has no extent.
+  List<ElementBox> elementBoxes() {
+    final rows = _db.select('''
+SELECT id, COALESCE(storey_id, 0), CAST(ifc_class AS BLOB),
+       bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z
+FROM elements
+ORDER BY id
+''');
+    final boxes = <ElementBox>[];
+    for (final row in rows) {
+      final minX = row.columnAt(3);
+      final minY = row.columnAt(4);
+      final minZ = row.columnAt(5);
+      final maxX = row.columnAt(6);
+      final maxY = row.columnAt(7);
+      final maxZ = row.columnAt(8);
+      if (minX == null ||
+          minY == null ||
+          minZ == null ||
+          maxX == null ||
+          maxY == null ||
+          maxZ == null) {
+        continue;
+      }
+      boxes.add(
+        ElementBox(
+          id: row.columnAt(0) as int,
+          storeyId: row.columnAt(1) as int,
+          ifcClass: packageText(row.columnAt(2)),
+          minX: (minX as num).toDouble(),
+          minY: (minY as num).toDouble(),
+          minZ: (minZ as num).toDouble(),
+          maxX: (maxX as num).toDouble(),
+          maxY: (maxY as num).toDouble(),
+          maxZ: (maxZ as num).toDouble(),
+        ),
+      );
+    }
+    return boxes;
   }
 
   List<PropInfo> props(int elementId) {

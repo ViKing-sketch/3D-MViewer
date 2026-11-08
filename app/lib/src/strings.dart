@@ -99,6 +99,17 @@ class S {
   String get viewBottom => russian ? 'Снизу' : 'Bottom';
   String get cameraViews => russian ? 'Виды' : 'Views';
   String get cameraHome => russian ? 'Камера по умолчанию' : 'Default camera';
+  String get walk => russian ? 'По этажу' : 'Walk';
+  String get walkStop => russian ? 'Орбита' : 'Orbit';
+  String walkHint(String storey, {required bool clear}) {
+    final place = clear
+        ? (russian ? 'старт вне габаритов' : 'start is outside the boxes')
+        : (russian ? 'старт внутри габарита' : 'start is inside a box');
+    return russian
+        ? '$storey · глаз 1,6 м · $place · сквозь стены'
+        : '$storey · eye 1.6 m · $place · through walls';
+  }
+
   String get actions => russian ? 'Действия' : 'Actions';
   String get loadingMesh => russian ? 'Загрузка меша…' : 'Loading mesh…';
 
