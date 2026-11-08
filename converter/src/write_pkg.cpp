@@ -566,8 +566,8 @@ void write_sqlite(const Scene& scene, const std::filesystem::path& path) {
     sqlite3_clear_bindings(insert_fts.get());
   }
 
-  auto insert_system = db.prepare(
-      "INSERT INTO systems(id, guid, ifc_class, name, description) VALUES (?,?,?,?,?)");
+  auto insert_system =
+      db.prepare("INSERT INTO systems(id, guid, ifc_class, name, description) VALUES (?,?,?,?,?)");
   auto insert_member =
       db.prepare("INSERT INTO system_elements(system_id, element_id) VALUES (?,?)");
   for (const SystemInfo& system : scene.systems) {

@@ -598,8 +598,8 @@ END-ISO-10303-21;
 
   {
     char legacy_err[512] = {};
-    fbv_package* legacy =
-        fbv_package_open((testdata / "sample_model").string().c_str(), legacy_err, sizeof(legacy_err));
+    fbv_package* legacy = fbv_package_open((testdata / "sample_model").string().c_str(), legacy_err,
+                                           sizeof(legacy_err));
     if (legacy == nullptr) std::cerr << legacy_err << "\n";
     CHECK(legacy != nullptr);
     if (legacy != nullptr) {
@@ -612,7 +612,8 @@ END-ISO-10303-21;
     CHECK(fbv::validate_package((testdata / "sample_model").string(), legacy_report) == 0);
 
     std::ostringstream ifc;
-    ifc << "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\n";
+    ifc << "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition "
+           "[CoordinationView]'),'2;1');\n";
     ifc << "FILE_NAME('systems.ifc','2026-11-08T00:00:00',(''),(''),'fbv','fbv','');\n";
     ifc << "FILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n";
     ifc << "#1=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);\n";
@@ -670,7 +671,8 @@ END-ISO-10303-21;
     writable.close();
     const auto sqlite_path = std::filesystem::path(systems.output) / "meta.sqlite";
     const std::string broken_hash = fbv::sha256_file(sqlite_path);
-    std::string manifest_text = fbv::read_text(std::filesystem::path(systems.output) / "manifest.json");
+    std::string manifest_text =
+        fbv::read_text(std::filesystem::path(systems.output) / "manifest.json");
     const auto hash_at = manifest_text.find("\"meta.sqlite\"");
     CHECK(hash_at != std::string::npos);
     const auto sha_key = manifest_text.find("\"sha256\"", hash_at);
@@ -687,8 +689,7 @@ END-ISO-10303-21;
                           std::to_string(std::filesystem::file_size(sqlite_path)));
     fbv::write_text(std::filesystem::path(systems.output) / "manifest.json", manifest_text);
     char broken_err[512] = {};
-    fbv_package* broken =
-        fbv_package_open(systems.output.c_str(), broken_err, sizeof(broken_err));
+    fbv_package* broken = fbv_package_open(systems.output.c_str(), broken_err, sizeof(broken_err));
     CHECK(broken == nullptr);
     CHECK(std::string(broken_err).find("missing table systems") != std::string::npos);
     std::string broken_report;

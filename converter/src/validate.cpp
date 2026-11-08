@@ -110,8 +110,8 @@ int validate_package(const std::string& path, std::string& report) {
           errors.push_back("meta.sqlite schema_meta does not match format_version");
         }
         if (format_version >= 2) {
-          auto systems = db.prepare(
-              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'systems'");
+          auto systems =
+              db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'systems'");
           auto members = db.prepare(
               "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'system_elements'");
           if (!systems.step_row() || !members.step_row()) {
