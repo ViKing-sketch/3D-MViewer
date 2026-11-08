@@ -104,6 +104,28 @@ void main() {
     expect(find.textContaining('IfcWall'), findsWidgets);
   });
 
+  testWidgets('specification csv is written into the chosen folder', (
+    tester,
+  ) async {
+    final dest = Directory.systemTemp.createTempSync('fbv-csv-ui-');
+    addTearDown(() => dest.deleteSync(recursive: true));
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    await tester.tap(find.text('Спецификация'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Экспорт CSV'));
+    await tester.pump();
+    await tester.enterText(find.byKey(const ValueKey('csv-folder')), dest.path);
+    await tester.tap(find.text('Сохранить'));
+    await tester.pump();
+    final file = File(p.join(dest.path, 'Sample Project.csv'));
+    expect(file.existsSync(), isTrue);
+    expect(file.readAsStringSync(), contains('IfcWall'));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('zip package opens the same project', (tester) async {
     final zip = _repoFile('testdata/sample_wall.fbvpkg');
     await tester.pumpWidget(FieldBimApp(autoOpenPath: zip));

@@ -35,7 +35,9 @@ class PackageImport {
 
   static void _deliver(String path) {
     final now = DateTime.now();
-    if (_lastPath == path && _lastAt != null && now.difference(_lastAt!) < const Duration(seconds: 2)) {
+    if (_lastPath == path &&
+        _lastAt != null &&
+        now.difference(_lastAt!) < const Duration(seconds: 2)) {
       return;
     }
     _lastPath = path;
@@ -51,6 +53,19 @@ class PackageImport {
   static Future<String?> pick() async {
     if (!Platform.isAndroid) return null;
     return channel.invokeMethod<String>('pick');
+  }
+
+  /// Android system document picker. Other platforms return null; the page
+  /// asks for a folder instead.
+  static Future<String?> saveCsv({
+    required String name,
+    required String text,
+  }) async {
+    if (!Platform.isAndroid) return null;
+    return channel.invokeMethod<String>('saveCsv', {
+      'name': name,
+      'text': text,
+    });
   }
 
   static Future<String?> takePending() async {
