@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <set>
 #include <sstream>
+#include <string>
 
 namespace fbv {
 namespace {
@@ -72,9 +73,11 @@ int validate_package(const std::string& path, std::string& report) {
       if (!Json::parse(read_text(root / "manifest.json"), manifest, parse_error)) {
         errors.push_back(parse_error);
       } else if (field(manifest, "format_version") == nullptr ||
-                 field(manifest, "format_version")->as_int(0) != FBV_FORMAT_VERSION) {
-        errors.push_back("format_version is not 1");
+                 field(manifest, "format_version")->as_int(-1) < FBV_FORMAT_VERSION_MIN ||
+                 field(manifest, "format_version")->as_int(-1) > FBV_FORMAT_VERSION) {
+        errors.push_back("unsupported format_version");
       } else {
+        const auto format_version = field(manifest, "format_version")->as_int(-1);
         const Json* parts = field(manifest, "parts");
         if (parts == nullptr || parts->type != Json::Type::Object) {
           errors.push_back("manifest.parts is missing");
@@ -103,8 +106,17 @@ int validate_package(const std::string& path, std::string& report) {
                 : std::string();
         SqliteDb db(root / "meta.sqlite", false);
         auto meta = db.prepare("SELECT value FROM schema_meta WHERE key = 'format_version'");
-        if (!meta.step_row() || meta.column_text(0) != "1") {
-          errors.push_back("meta.sqlite schema_meta is not format 1");
+        if (!meta.step_row() || meta.column_text(0) != std::to_string(format_version)) {
+          errors.push_back("meta.sqlite schema_meta does not match format_version");
+        }
+        if (format_version >= 2) {
+          auto systems = db.prepare(
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'systems'");
+          auto members = db.prepare(
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'system_elements'");
+          if (!systems.step_row() || !members.step_row()) {
+            errors.push_back("format_version 2 is missing table systems or system_elements");
+          }
         }
         auto count_elements = db.prepare("SELECT COUNT(*) FROM elements");
         count_elements.step_row();

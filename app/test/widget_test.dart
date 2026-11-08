@@ -1,14 +1,18 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:field_bim_viewer/main.dart';
 import 'package:field_bim_viewer/src/model.dart';
 import 'package:field_bim_viewer/src/package_plan.dart';
 import 'package:field_bim_viewer/src/model_page.dart';
+import 'package:field_bim_viewer/src/sqlite_setup.dart';
 import 'package:field_bim_viewer/src/strings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqlite3/sqlite3.dart';
 
 String _repoFile(String relative) =>
     p.normalize(p.join(Directory.current.path, '..', relative));
@@ -401,7 +405,7 @@ void main() {
     expect(_tool(tester, 'Фильтр').isSelected, isTrue);
     await tester.tap(find.byTooltip('Фильтр'));
     await tester.pumpAndSettle();
-    expect(find.text('Этаж, класс, материал'), findsOneWidget);
+    expect(find.text('Этаж, класс, материал, система'), findsOneWidget);
     final sheetStrips = find.byWidgetPredicate(
       (widget) =>
           widget is Scrollable && widget.axisDirection == AxisDirection.right,
@@ -499,4 +503,78 @@ void main() {
     expect(find.byKey(const ValueKey('walk-hint')), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('a system filter hides elements that are not members', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final copy = _heatingCopy();
+    addTearDown(() => copy.deleteSync(recursive: true));
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: copy.path));
+    await tester.pump();
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('system-all')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('system-1')));
+    await tester.pump();
+    expect(find.text('Wall W-1'), findsWidgets);
+    expect(find.text('Column C-1'), findsNothing);
+    expect(find.text('Slab S-1'), findsNothing);
+    expect(find.text('Marker no geom'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('system-all')));
+    await tester.pump();
+    expect(find.text('Column C-1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+Directory _heatingCopy() {
+  final source = Directory(_repoFile('testdata/sample_model'));
+  final dest = Directory.systemTemp.createTempSync('fbv-system-');
+  _copyPackage(source, dest);
+  configureSqlite();
+  final db = sqlite3.open(p.join(dest.path, 'meta.sqlite'));
+  db.execute("UPDATE schema_meta SET value = '2' WHERE key = 'format_version'");
+  db.execute(
+    'CREATE TABLE systems(id INTEGER PRIMARY KEY, guid TEXT, ifc_class TEXT NOT NULL, name TEXT, description TEXT)',
+  );
+  db.execute(
+    'CREATE TABLE system_elements(system_id INTEGER NOT NULL, element_id INTEGER NOT NULL, PRIMARY KEY (system_id, element_id))',
+  );
+  db.execute(
+    "INSERT INTO systems(id, guid, ifc_class, name, description) VALUES (1, 'guid', 'IfcDistributionSystem', 'Heating', '')",
+  );
+  db.execute(
+    'INSERT INTO system_elements(system_id, element_id) VALUES (1, 1)',
+  );
+  db.dispose();
+  final manifest =
+      jsonDecode(File(p.join(dest.path, 'manifest.json')).readAsStringSync())
+          as Map<String, dynamic>;
+  manifest['format_version'] = 2;
+  final bytes = File(p.join(dest.path, 'meta.sqlite')).readAsBytesSync();
+  final parts = manifest['parts'] as Map<String, dynamic>;
+  final meta = Map<String, dynamic>.from(parts['meta.sqlite'] as Map);
+  meta['sha256'] = sha256.convert(bytes).toString();
+  meta['bytes'] = bytes.length;
+  parts['meta.sqlite'] = meta;
+  File(
+    p.join(dest.path, 'manifest.json'),
+  ).writeAsStringSync(jsonEncode(manifest));
+  return dest;
+}
+
+void _copyPackage(Directory from, Directory to) {
+  to.createSync(recursive: true);
+  for (final entity in from.listSync(followLinks: false)) {
+    final target = p.join(to.path, p.basename(entity.path));
+    if (entity is Directory) {
+      _copyPackage(entity, Directory(target));
+    } else if (entity is File) {
+      entity.copySync(target);
+    }
+  }
 }

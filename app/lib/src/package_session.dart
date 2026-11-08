@@ -25,12 +25,16 @@ class PackageSession {
     this._temp,
     this.manifest,
     this.rootPath,
+    this.formatVersion,
   );
 
   final PackageSummary summary;
   final Database _db;
   final Directory? _temp;
   final Map<String, dynamic> manifest;
+
+  /// `manifest.format_version`. Only 1 and 2 open. 1 has no system tables.
+  final int formatVersion;
 
   /// Directory that contains `manifest.json` and `mesh/`. For a zip package this
   /// is the streamed extract, not the archive itself.
@@ -131,7 +135,7 @@ class PackageSession {
         jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync()))
             as Map<String, dynamic>;
     final version = manifest['format_version'];
-    if (version != 1) {
+    if (version is! int || (version != 1 && version != 2)) {
       throw PackageException('Неподдерживаемая format_version: $version');
     }
     if (verifyParts) _verifyParts(root, manifest, hashes);
@@ -139,6 +143,24 @@ class PackageSession {
       p.join(root.path, 'meta.sqlite'),
       mode: OpenMode.readOnly,
     );
+    final meta = db.select(
+      "SELECT value FROM schema_meta WHERE key = 'format_version'",
+    );
+    final stored = meta.isEmpty ? '' : meta.first.columnAt(0).toString();
+    if (stored != '$version') {
+      db.dispose();
+      throw PackageException(
+        'schema_meta format_version не совпал с manifest: $stored',
+      );
+    }
+    if (version >= 2 &&
+        (!_tableExists(db, 'systems') ||
+            !_tableExists(db, 'system_elements'))) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы systems',
+      );
+    }
     final count =
         db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
     final source = (manifest['source'] as Map?) ?? const {};
@@ -159,7 +181,16 @@ class PackageSession {
       deleteOnClose,
       manifest,
       root.path,
+      version,
     );
+  }
+
+  static bool _tableExists(Database db, String name) {
+    final rows = db.select(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+      [name],
+    );
+    return rows.isNotEmpty;
   }
 
   static void _verifyParts(
@@ -248,6 +279,7 @@ FROM elements e
 LEFT JOIN types t ON t.id = e.type_id
 ORDER BY e.id
 ''');
+    final members = _systemMembers();
     return [
       for (final row in rows)
         ElementInfo(
@@ -260,8 +292,42 @@ ORDER BY e.id
           typeName: packageText(row.columnAt(6)),
           material: packageText(row.columnAt(7)),
           guid: packageText(row.columnAt(8)),
+          systemIds: members[row.columnAt(0) as int] ?? const [],
         ),
     ];
+  }
+
+  /// Engineering systems. A format_version 1 package has none; that is not an error.
+  List<SystemInfo> systems() {
+    if (formatVersion < 2) return const [];
+    final rows = _db.select('''
+SELECT id, CAST(COALESCE(name, '') AS BLOB), CAST(ifc_class AS BLOB),
+       CAST(COALESCE(guid, '') AS BLOB)
+FROM systems
+ORDER BY id
+''');
+    return [
+      for (final row in rows)
+        SystemInfo(
+          id: row.columnAt(0) as int,
+          name: packageText(row.columnAt(1)),
+          ifcClass: packageText(row.columnAt(2)),
+          guid: packageText(row.columnAt(3)),
+        ),
+    ];
+  }
+
+  Map<int, List<int>> _systemMembers() {
+    if (formatVersion < 2) return const {};
+    final rows = _db.select(
+      'SELECT element_id, system_id FROM system_elements ORDER BY system_id, element_id',
+    );
+    final members = <int, List<int>>{};
+    for (final row in rows) {
+      final elementId = row.columnAt(0) as int;
+      members.putIfAbsent(elementId, () => <int>[]).add(row.columnAt(1) as int);
+    }
+    return members;
   }
 
   /// World-metre boxes. A null box is omitted. A zero box is kept so the

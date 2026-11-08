@@ -74,6 +74,16 @@ struct FailureNote {
   std::string detail;
 };
 
+struct SystemInfo {
+  std::int64_t ifc_id = 0;
+  std::int64_t id = 0;
+  std::string guid;
+  std::string ifc_class;
+  std::string name;
+  std::string description;
+  std::vector<std::int64_t> element_ids;
+};
+
 struct Element {
   std::int64_t ifc_id = 0;
   std::int64_t id = 0;
@@ -118,6 +128,7 @@ struct Scene {
   std::vector<SpatialNode> spatial;
   std::vector<TypeInfo> types;
   std::vector<Element> elements;
+  std::vector<SystemInfo> systems;
   std::vector<std::string> warnings;
   std::map<std::string, int> warning_counts;
   std::vector<FailureNote> failures;

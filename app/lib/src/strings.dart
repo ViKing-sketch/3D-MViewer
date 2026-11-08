@@ -42,10 +42,12 @@ class S {
   String get allClasses => russian ? 'Все классы' : 'All classes';
   String get allStoreys => russian ? 'Все этажи' : 'All storeys';
   String get allMaterials => russian ? 'Все материалы' : 'All materials';
+  String get allSystems => russian ? 'Все системы' : 'All systems';
   String get noMaterial => russian ? 'Без материала' : 'No material';
   String get filter => russian ? 'Фильтр' : 'Filter';
-  String get filterTitle =>
-      russian ? 'Этаж, класс, материал' : 'Storey, class, material';
+  String get filterTitle => russian
+      ? 'Этаж, класс, материал, система'
+      : 'Storey, class, material, system';
   String get noSelection => russian ? 'Выберите элемент' : 'Select an element';
   String get quantities => russian ? 'Количества' : 'Quantities';
   String get classification => russian ? 'Классификация' : 'Classification';

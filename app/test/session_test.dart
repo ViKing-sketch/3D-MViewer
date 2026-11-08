@@ -115,6 +115,166 @@ void main() {
     );
     session.close();
   });
+
+  test('format_version 1 opens and reports no systems', () {
+    final path = p.normalize(
+      p.join(Directory.current.path, '..', 'testdata', 'sample_model'),
+    );
+    final session = PackageSession.openPath(path);
+    expect(session.formatVersion, 1);
+    expect(session.systems(), isEmpty);
+    final wall = session.elements().firstWhere(
+      (element) => element.name == 'Wall W-1',
+    );
+    expect(wall.systemIds, isEmpty);
+    session.close();
+  });
+
+  test('an unknown format_version is rejected with the number', () {
+    final copy = _copySample();
+    try {
+      final manifest = _readManifest(copy);
+      manifest['format_version'] = 3;
+      _writeManifest(copy, manifest);
+      expect(
+        () => PackageSession.openPath(copy.path),
+        throwsA(
+          isA<PackageException>().having(
+            (error) => error.message,
+            'message',
+            contains('Неподдерживаемая format_version: 3'),
+          ),
+        ),
+      );
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+
+  test('format_version 2 without the system tables fails explicitly', () {
+    final copy = _copySample();
+    try {
+      final manifest = _readManifest(copy);
+      manifest['format_version'] = 2;
+      _writeManifest(copy, manifest);
+      expect(
+        () => PackageSession.openPath(copy.path),
+        throwsA(
+          isA<PackageException>().having(
+            (error) => error.message,
+            'message',
+            contains('schema_meta format_version не совпал'),
+          ),
+        ),
+      );
+
+      configureSqlite();
+      final db = sqlite3.open(p.join(copy.path, 'meta.sqlite'));
+      db.execute(
+        "UPDATE schema_meta SET value = '2' WHERE key = 'format_version'",
+      );
+      db.dispose();
+      final bumped = _readManifest(copy);
+      _refreshPart(copy, bumped, 'meta.sqlite');
+      _writeManifest(copy, bumped);
+      expect(
+        () => PackageSession.openPath(copy.path),
+        throwsA(
+          isA<PackageException>().having(
+            (error) => error.message,
+            'message',
+            contains('нет таблицы systems'),
+          ),
+        ),
+      );
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+
+  test('format_version 2 keeps membership and still opens a member', () {
+    final copy = _copySample();
+    try {
+      _installHeating(copy);
+      final session = PackageSession.openPath(copy.path);
+      expect(session.formatVersion, 2);
+      expect(session.systems().map((system) => system.name), ['Heating']);
+      final elements = session.elements();
+      final wall = elements.firstWhere((element) => element.name == 'Wall W-1');
+      final column = elements.firstWhere(
+        (element) => element.name == 'Column C-1',
+      );
+      expect(wall.systemIds, [1]);
+      expect(column.systemIds, isEmpty);
+      session.close();
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+}
+
+Directory _copySample() {
+  final source = Directory(
+    p.normalize(
+      p.join(Directory.current.path, '..', 'testdata', 'sample_model'),
+    ),
+  );
+  final dest = Directory.systemTemp.createTempSync('fbv-ver-');
+  _copyTree(source, dest);
+  return dest;
+}
+
+Map<String, dynamic> _readManifest(Directory root) {
+  return jsonDecode(File(p.join(root.path, 'manifest.json')).readAsStringSync())
+      as Map<String, dynamic>;
+}
+
+void _writeManifest(Directory root, Map<String, dynamic> manifest) {
+  File(
+    p.join(root.path, 'manifest.json'),
+  ).writeAsStringSync(jsonEncode(manifest));
+}
+
+void _refreshPart(Directory root, Map<String, dynamic> manifest, String part) {
+  final file = File(p.join(root.path, part));
+  final bytes = file.readAsBytesSync();
+  final parts = manifest['parts'] as Map<String, dynamic>;
+  final meta = Map<String, dynamic>.from(parts[part] as Map);
+  meta['sha256'] = sha256.convert(bytes).toString();
+  meta['bytes'] = bytes.length;
+  parts[part] = meta;
+}
+
+void _installHeating(Directory root) {
+  configureSqlite();
+  final db = sqlite3.open(p.join(root.path, 'meta.sqlite'));
+  db.execute("UPDATE schema_meta SET value = '2' WHERE key = 'format_version'");
+  db.execute('''
+CREATE TABLE systems(
+  id INTEGER PRIMARY KEY,
+  guid TEXT,
+  ifc_class TEXT NOT NULL,
+  name TEXT,
+  description TEXT
+)''');
+  db.execute('''
+CREATE TABLE system_elements(
+  system_id INTEGER NOT NULL,
+  element_id INTEGER NOT NULL,
+  PRIMARY KEY (system_id, element_id)
+)''');
+  db.execute(
+    "INSERT INTO systems(id, guid, ifc_class, name, description) "
+    "VALUES (1, '0Yvh4\$d\$H4PgX8k1\$f\$xS4', 'IfcDistributionSystem', 'Heating', '')",
+  );
+  db.execute(
+    'INSERT INTO system_elements(system_id, element_id) VALUES (1, 1)',
+  );
+  db.dispose();
+  final manifest = _readManifest(root);
+  manifest['format_version'] = 2;
+  _refreshPart(root, manifest, 'meta.sqlite');
+  _writeManifest(root, manifest);
 }
 
 void _copyTree(Directory from, Directory to) {
