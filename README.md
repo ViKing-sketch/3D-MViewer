@@ -105,7 +105,7 @@ cmake --build --preset windows-mingw
 ctest --preset windows-mingw --output-on-failure
 ```
 
-Пресеты `windows-msvc` и `windows-mingw` видны только на Windows. Пресет `android-arm64` требует переменную `ANDROID_NDK_HOME` и относится к задаче сборки OCCT под NDK. Пресет `ios` — к будущему xcframework на macOS.
+Пресеты `windows-msvc` и `windows-mingw` видны только на Windows. Пресет `android-arm64` требует переменную `ANDROID_NDK_HOME` и относится к задаче сборки OCCT под NDK. Отдельная проверка без смены формата пакета — `tools/android_occt_probe/build_android.sh` (NDK 28.2, API 28). Пресет `ios` — к будущему xcframework на macOS.
 
 ## Flutter
 

@@ -8,7 +8,7 @@
 
 ## M0
 
-On-device OCCT не собирался: нет прогона на устройствах и нет отчёта go/no-go. Шаблон измерений лежит в [m0_report.md](m0_report.md). Пресет `android-arm64` требует `ANDROID_NDK_HOME` и в CI не запускается. Superbuild OCCT 7.8.1 и IfcOpenShell включается `-DFBV_WITH_IFCOPENSHELL=ON` (пресеты `linux-gcc-ifcopenshell`, `windows-msvc-ifcopenshell`, `windows-vs2026`). Сводка `--stats` / `--json` — бенчмарк хостового мешера в том же файле.
+Полный прототип M0 (STEP/XDE, два устройства, три модели) не выполнен, go/no-go по телефону нет. Отдельная проверка собрала OCCT 7.8.1 под NDK 28.2 для `arm64-v8a` и `x86_64` на API 28 и прогнала коробку с BinTools на эмуляторе Android 9 x86_64. Формат `brep.pack` от этого не меняется. Числа — в [m0_report.md](m0_report.md). Пресет `android-arm64` по-прежнему требует `ANDROID_NDK_HOME` и в CI не запускается. Superbuild хоста включается `-DFBV_WITH_IFCOPENSHELL=ON`.
 
 ## ОВ-1 … ОВ-11
 
