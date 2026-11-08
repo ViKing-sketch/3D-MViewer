@@ -338,4 +338,68 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('storey and material filters hide the other elements', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('storey-4')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('storey-4')));
+    await tester.pump();
+    expect(find.text('Wall W-1'), findsWidgets);
+    expect(find.text('Column C-1'), findsWidgets);
+
+    final materialStrip = find.ancestor(
+      of: find.text('Все материалы'),
+      matching: find.byType(Scrollable),
+    );
+    await tester.drag(materialStrip, const Offset(-420, 0));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('material-Бетон')));
+    await tester.pump();
+    expect(find.text('Wall W-1'), findsWidgets);
+    expect(find.text('Column C-1'), findsNothing);
+    expect(find.text('Slab S-1'), findsNothing);
+    expect(find.text('Marker no geom'), findsNothing);
+
+    await tester.tap(find.text('3D'));
+    await tester.pumpAndSettle();
+    expect(_tool(tester, 'Фильтр').isSelected, isTrue);
+    await tester.tap(find.byTooltip('Фильтр'));
+    await tester.pumpAndSettle();
+    expect(find.text('Этаж, класс, материал'), findsOneWidget);
+    final sheetStrips = find.byWidgetPredicate(
+      (widget) =>
+          widget is Scrollable && widget.axisDirection == AxisDirection.right,
+    );
+    await tester.drag(sheetStrips.last, const Offset(-420, 0));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('material-Бетон')), findsOneWidget);
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Действия'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Показать всё'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+    expect(find.text('Column C-1'), findsOneWidget);
+    expect(find.text('Slab S-1'), findsOneWidget);
+    expect(find.text('Marker no geom'), findsOneWidget);
+    final storeyAll = tester.widget<FilterChip>(
+      find.byKey(const ValueKey('storey-all')),
+    );
+    expect(storeyAll.selected, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }

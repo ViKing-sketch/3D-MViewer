@@ -37,6 +37,12 @@ class S {
       ? 'Офлайн. Сеть приложению не нужна.'
       : 'Offline. This app does not use the network.';
   String get allClasses => russian ? 'Все классы' : 'All classes';
+  String get allStoreys => russian ? 'Все этажи' : 'All storeys';
+  String get allMaterials => russian ? 'Все материалы' : 'All materials';
+  String get noMaterial => russian ? 'Без материала' : 'No material';
+  String get filter => russian ? 'Фильтр' : 'Filter';
+  String get filterTitle =>
+      russian ? 'Этаж, класс, материал' : 'Storey, class, material';
   String get noSelection => russian ? 'Выберите элемент' : 'Select an element';
   String get quantities => russian ? 'Количества' : 'Quantities';
   String get classification => russian ? 'Классификация' : 'Classification';

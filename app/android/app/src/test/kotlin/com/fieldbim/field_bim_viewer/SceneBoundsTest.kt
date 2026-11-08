@@ -68,6 +68,26 @@ class SceneBoundsTest {
     }
 
     @Test
+    fun fitSkipsHiddenAndFramesTheIsolatedSet() {
+        val wall = geom(1, 0f, 0f, 0f, 2f, 2f, 2f)
+        val far = geom(2, 100f, 0f, 0f, 110f, 2f, 2f)
+        val other = geom(3, -40f, 0f, 0f, -30f, 2f, 2f)
+        val hidden = SceneBounds.skipForFrame(listOf(1L, 2L), emptySet(), setOf(2L), emptySet())
+        assertEquals(setOf(2L), hidden)
+        val hiddenFit = SceneBounds.fit(listOf(wall, far), hidden)
+        requireNotNull(hiddenFit)
+        assertEquals(0f, hiddenFit.bounds[0], 0.001f)
+        assertEquals(2f, hiddenFit.bounds[3], 0.001f)
+
+        val isolated = SceneBounds.skipForFrame(listOf(1L, 2L, 3L), setOf(9L), emptySet(), setOf(2L))
+        assertEquals(setOf(9L, 1L, 3L), isolated)
+        val isolatedFit = SceneBounds.fit(listOf(wall, far, other), isolated)
+        requireNotNull(isolatedFit)
+        assertEquals(100f, isolatedFit.bounds[0], 0.001f)
+        assertEquals(110f, isolatedFit.bounds[3], 0.001f)
+    }
+
+    @Test
     fun fitKeepsAContinuousRun() {
         val run = (0 until 20).map { i ->
             val x = i * 5f

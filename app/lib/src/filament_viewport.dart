@@ -28,6 +28,7 @@ class FilamentViewport extends StatefulWidget {
     this.section = const SectionView(),
     this.renderRevision = 0,
     this.frameToken = 0,
+    this.fitToken = 0,
     this.bottomInset = 0,
     this.onPick,
     this.onStatus,
@@ -47,6 +48,9 @@ class FilamentViewport extends StatefulWidget {
   final int renderRevision;
   final int frameToken;
 
+  /// Bumped when the visible set changes and the camera should frame it.
+  final int fitToken;
+
   /// Fraction of this view covered from the bottom, measured from the sheet.
   final double bottomInset;
   final ValueChanged<int?>? onPick;
@@ -63,6 +67,7 @@ class FilamentViewportState extends State<FilamentViewport> {
   String? _status;
   String? _statusCode;
   int _appliedFrame = 0;
+  int _appliedFit = 0;
 
   Future<void> fitAll() =>
       _commands?.fit(selected: false) ?? Future<void>.value();
@@ -83,7 +88,8 @@ class FilamentViewportState extends State<FilamentViewport> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.renderRevision != widget.renderRevision ||
         oldWidget.selectedId != widget.selectedId ||
-        oldWidget.frameToken != widget.frameToken) {
+        oldWidget.frameToken != widget.frameToken ||
+        oldWidget.fitToken != widget.fitToken) {
       _pushState();
     }
     if ((oldWidget.bottomInset - widget.bottomInset).abs() > 0.001) {
@@ -177,6 +183,9 @@ class FilamentViewportState extends State<FilamentViewport> {
     if (commands == null) return;
     final frame = widget.frameToken != _appliedFrame;
     _appliedFrame = widget.frameToken;
+    final fit = widget.fitToken;
+    final shouldFit = fit != _appliedFit && fit != 0;
+    _appliedFit = fit;
     await commands.setViewState(
       selectedId: widget.selectedId,
       hidden: widget.hiddenIds.toList(),
@@ -184,6 +193,7 @@ class FilamentViewportState extends State<FilamentViewport> {
       xray: widget.xray,
       frame: frame,
     );
+    if (shouldFit) await commands.fit(selected: false);
   }
 
   Future<void> _pushSection() async {
@@ -201,9 +211,8 @@ class FilamentViewportState extends State<FilamentViewport> {
         selectedName: widget.selectedName,
       );
     }
-    final showStatus = _status != null &&
-        _statusCode != 'ready' &&
-        _statusCode != 'idle';
+    final showStatus =
+        _status != null && _statusCode != 'ready' && _statusCode != 'idle';
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -217,10 +226,15 @@ class FilamentViewportState extends State<FilamentViewport> {
               child: Align(
                 alignment: Alignment.topCenter,
                 child: Material(
-                  color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.surface.withValues(alpha: 0.92),
                   borderRadius: BorderRadius.circular(8),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     child: Text(
                       _status!,
                       maxLines: 1,

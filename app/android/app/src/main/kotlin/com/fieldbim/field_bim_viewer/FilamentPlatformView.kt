@@ -1371,7 +1371,8 @@ class FilamentPlatformView(
     }
 
     private fun allBox(): FloatArray? {
-        return SceneBounds.fit(records.values, standInIds)?.bounds
+        val skip = SceneBounds.skipForFrame(records.keys, standInIds, hidden, isolated)
+        return SceneBounds.fit(records.values, skip)?.bounds
             ?: floatArrayOf(frameMin[0], frameMin[1], frameMin[2], frameMax[0], frameMax[1], frameMax[2])
     }
 
