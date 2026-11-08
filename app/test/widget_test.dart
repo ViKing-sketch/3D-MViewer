@@ -447,4 +447,31 @@ void main() {
     expect(field.controller?.text, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('walk mode stands on the storey and orbit leaves it', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    final toggle = find.byKey(const ValueKey('walk-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('walk-hint')), findsOneWidget);
+    expect(find.textContaining('Level 1'), findsWidgets);
+    expect(find.textContaining('глаз 1,6 м'), findsOneWidget);
+    expect(find.textContaining('сквозь стены'), findsOneWidget);
+    expect(find.textContaining('старт вне габаритов'), findsOneWidget);
+    await tester.tap(find.byTooltip(const S(true).actions));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(const S(true).fitAll));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('walk-hint')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

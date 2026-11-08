@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'filament_channel.dart';
 import 'strings.dart';
+import 'walk_pose.dart';
 
 /// Filament platform view on Android. Other targets keep the layout slot.
 ///
@@ -29,6 +30,7 @@ class FilamentViewport extends StatefulWidget {
     this.renderRevision = 0,
     this.frameToken = 0,
     this.fitToken = 0,
+    this.walk = const WalkCommand(enabled: false, token: 0),
     this.bottomInset = 0,
     this.onPick,
     this.onStatus,
@@ -50,6 +52,9 @@ class FilamentViewport extends StatefulWidget {
 
   /// Bumped when the visible set changes and the camera should frame it.
   final int fitToken;
+
+  /// Orbit, or a first-person pose on one storey.
+  final WalkCommand walk;
 
   /// Fraction of this view covered from the bottom, measured from the sheet.
   final double bottomInset;
@@ -96,6 +101,7 @@ class FilamentViewportState extends State<FilamentViewport> {
       _commands?.setFitInset(widget.bottomInset);
     }
     if (oldWidget.section != widget.section) _pushSection();
+    if (oldWidget.walk != widget.walk) _pushWalk();
     if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
       _commands?.load(widget.rootPath!);
     }
@@ -140,6 +146,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     if (widget.rootPath != null) await commands.load(widget.rootPath!);
     await _pushState();
     await _pushSection();
+    await _pushWalk();
   }
 
   void _applyStatus(Map<dynamic, dynamic> raw) {
@@ -200,6 +207,12 @@ class FilamentViewportState extends State<FilamentViewport> {
     final commands = _commands;
     if (commands == null) return;
     await commands.setSection(widget.section);
+  }
+
+  Future<void> _pushWalk() async {
+    final commands = _commands;
+    if (commands == null) return;
+    await commands.setNavigation(widget.walk);
   }
 
   @override

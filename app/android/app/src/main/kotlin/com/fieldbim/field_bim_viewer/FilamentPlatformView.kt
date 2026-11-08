@@ -120,6 +120,10 @@ class FilamentPlatformView(
     private var swapChain: SwapChain? = null
     private var manipulator: Manipulator? = null
     private var gesture: OrbitGestures? = null
+    private var walkMode = false
+    private var walkToken = -1
+    private var walkPose = WalkRig.Pose(0f, 1.6f, 0f, 0f, 0f)
+    private var walkGesture: WalkGestures? = null
     private var dollyPending = 0f
     private var dollySpeed = 0.25f
     private var dollyX = 0
@@ -362,6 +366,10 @@ class FilamentPlatformView(
                     if (kotlin.math.abs(next - fitBottomInset) < 0.015) return@post
                     fitBottomInset = next
                     applyViewViewport()
+                    if (walkMode) {
+                        updateProjection()
+                        return@post
+                    }
                     val box = framedBox
                     if (box != null) frame(box, preset) else updateProjection()
                 }
@@ -373,6 +381,37 @@ class FilamentPlatformView(
                     if (destroyed) return@post
                     preset = next
                     frame(allBox(), preset)
+                }
+                result.success(null)
+            }
+            "setNavigation" -> {
+                val mode = call.argument<String>("mode") ?: "orbit"
+                val token = call.argument<Number>("token")?.toInt() ?: 0
+                val eye = vec3(call.argument<List<*>>("eye"))
+                val look = vec3(call.argument<List<*>>("look"))
+                renderHandler.post {
+                    if (destroyed) return@post
+                    if (mode != "walk" || eye == null || look == null) {
+                        if (walkMode) exitWalkKeepingView()
+                        return@post
+                    }
+                    if (walkMode && token == walkToken) return@post
+                    walkToken = token
+                    walkPose = WalkRig.fromLook(
+                        eye[0], eye[1], eye[2], look[0], look[1], look[2],
+                    )
+                    walkMode = true
+                    gesture = null
+                    walkGesture = WalkGestures(::nudgeLook, ::nudgeMove)
+                    near = 0.05
+                    baseNear = 0.05
+                    if (far < 2000.0) far = 2000.0
+                    updateProjection()
+                    Log.i(
+                        TAG,
+                        "walk eye=${eye[0]},${eye[1]},${eye[2]} " +
+                            "look=${look[0]},${look[1]},${look[2]}",
+                    )
                 }
                 result.success(null)
             }
@@ -623,6 +662,9 @@ class FilamentPlatformView(
         publishedAt = Float.NaN
         publishedHalf = Float.NaN
         preset = "iso"
+        walkMode = false
+        walkToken = -1
+        walkGesture = null
         selected = 0L
         hidden = HashSet()
         isolated = HashSet()
@@ -1093,16 +1135,32 @@ class FilamentPlatformView(
         if (destroyed || !uiHelper.isReadyToRender || swapChain == null) return
         val dt = if (lastFrame == 0L) 0f else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceIn(0f, 0.1f)
         lastFrame = frameTimeNanos
-        flushDolly(dt)
-        manipulator?.update(dt)
-        val eye = DoubleArray(3)
-        val target = DoubleArray(3)
-        val up = DoubleArray(3)
-        manipulator?.getLookAt(eye, target, up)
-        if (manipulator != null) {
-            lastEye = eye
-            lastTarget = target
-            camera.lookAt(eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2])
+        if (walkMode) {
+            val pose = walkPose
+            val look = WalkRig.forward(pose.yaw, pose.pitch)
+            lastEye[0] = pose.eyeX.toDouble()
+            lastEye[1] = pose.eyeY.toDouble()
+            lastEye[2] = pose.eyeZ.toDouble()
+            lastTarget[0] = pose.eyeX + look[0].toDouble()
+            lastTarget[1] = pose.eyeY + look[1].toDouble()
+            lastTarget[2] = pose.eyeZ + look[2].toDouble()
+            camera.lookAt(
+                lastEye[0], lastEye[1], lastEye[2],
+                lastTarget[0], lastTarget[1], lastTarget[2],
+                0.0, 1.0, 0.0,
+            )
+        } else {
+            flushDolly(dt)
+            manipulator?.update(dt)
+            val eye = DoubleArray(3)
+            val target = DoubleArray(3)
+            val up = DoubleArray(3)
+            manipulator?.getLookAt(eye, target, up)
+            if (manipulator != null) {
+                lastEye = eye
+                lastTarget = target
+                camera.lookAt(eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2])
+            }
         }
         if (sectionEnabled) syncSection(log = false)
         resourceLoader.asyncUpdateLoad()
@@ -1241,6 +1299,8 @@ class FilamentPlatformView(
     }
 
     private fun frame(box: FloatArray?, cameraPreset: String) {
+        walkMode = false
+        walkGesture = null
         val bounds = box
         if (bounds == null || bounds.size < 6) {
             Log.i(TAG, "frame skipped")
@@ -1444,6 +1504,63 @@ class FilamentPlatformView(
         camera.setProjection(45.0, frameAspect(), near, far, Camera.Fov.VERTICAL)
     }
 
+    private fun nudgeLook(dx: Float, dy: Float) {
+        renderHandler.post {
+            if (!walkMode || destroyed) return@post
+            walkPose = WalkRig.lookDrag(walkPose, dx, dy)
+        }
+    }
+
+    private fun nudgeMove(forward: Float, strafe: Float) {
+        renderHandler.post {
+            if (!walkMode || destroyed) return@post
+            walkPose = WalkRig.move(walkPose, forward, strafe)
+        }
+    }
+
+    private fun exitWalkKeepingView() {
+        val pose = walkPose
+        val look = WalkRig.forward(pose.yaw, pose.pitch)
+        lastEye[0] = pose.eyeX.toDouble()
+        lastEye[1] = pose.eyeY.toDouble()
+        lastEye[2] = pose.eyeZ.toDouble()
+        lastTarget[0] = pose.eyeX + look[0].toDouble()
+        lastTarget[1] = pose.eyeY + look[1].toDouble()
+        lastTarget[2] = pose.eyeZ + look[2].toDouble()
+        walkMode = false
+        walkGesture = null
+        val zoom = max(dollySpeed, 0.25f)
+        manipulator = Manipulator.Builder()
+            .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
+            .targetPosition(
+                lastTarget[0].toFloat(),
+                lastTarget[1].toFloat(),
+                lastTarget[2].toFloat(),
+            )
+            .orbitHomePosition(
+                lastEye[0].toFloat(),
+                lastEye[1].toFloat(),
+                lastEye[2].toFloat(),
+            )
+            .upVector(0f, 1f, 0f)
+            .zoomSpeed(zoom)
+            .fovDegrees(CameraFit.fovDegrees.toFloat())
+            .fovDirection(Manipulator.Fov.VERTICAL)
+            .farPlane(far.toFloat())
+            .build(Manipulator.Mode.ORBIT)
+        gesture = OrbitGestures(surfaceView, manipulator!!, ::noteZoom)
+    }
+
+    private fun vec3(raw: List<*>?): FloatArray? {
+        if (raw == null || raw.size < 3) return null
+        val out = FloatArray(3)
+        for (i in 0..2) {
+            val number = raw[i] as? Number ?: return null
+            out[i] = number.toFloat()
+        }
+        return out
+    }
+
     private fun noteZoom(x: Int, y: Int, scrollDelta: Float) {
         dollyX = x
         dollyY = y
@@ -1476,8 +1593,21 @@ class FilamentPlatformView(
 
     private fun onTouch(event: MotionEvent): Boolean {
         if (!engineAlive || destroyed) return true
-        gesture?.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_SCROLL && manipulator != null) {
+        if (walkMode) {
+            walkGesture?.onTouchEvent(event)
+            if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+                val wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                val metres = wheel * WalkRig.metresPerWheel
+                renderHandler.post {
+                    if (walkMode && !destroyed) {
+                        walkPose = WalkRig.move(walkPose, metres, 0f)
+                    }
+                }
+            }
+        } else {
+            gesture?.onTouchEvent(event)
+        }
+        if (!walkMode && event.actionMasked == MotionEvent.ACTION_SCROLL && manipulator != null) {
             val wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
             noteZoom(event.x.toInt(), event.y.toInt(), -wheel * Dolly.wheelScroll)
         }

@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import 'walk_pose.dart';
+
 /// Commands for one `fbv/filament` platform view.
 ///
 /// The native view owns the camera gestures. Flutter sends selection,
@@ -49,6 +51,23 @@ class FilamentCommands {
 
   Future<void> setCamera(String preset) {
     return channel.invokeMethod<void>('setCamera', {'preset': preset});
+  }
+
+  /// [WalkCommand.enabled] places the eye on a storey. Orbit leaves the
+  /// current view where the last orbit or walk frame put it.
+  Future<void> setNavigation(WalkCommand walk) {
+    if (!walk.enabled) {
+      return channel.invokeMethod<void>('setNavigation', {
+        'mode': 'orbit',
+        'token': walk.token,
+      });
+    }
+    return channel.invokeMethod<void>('setNavigation', {
+      'mode': 'walk',
+      'token': walk.token,
+      'eye': [walk.eyeX, walk.eyeY, walk.eyeZ],
+      'look': [walk.lookX, walk.lookY, walk.lookZ],
+    });
   }
 
   /// Fraction of the platform view covered from the bottom, usually by the sheet.
@@ -129,5 +148,6 @@ class SectionView {
   }
 
   @override
-  int get hashCode => Object.hash(enabled, near, axis, flip, offset, box, inset);
+  int get hashCode =>
+      Object.hash(enabled, near, axis, flip, offset, box, inset);
 }
