@@ -5,7 +5,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'appearance.dart';
+import 'csv_export.dart';
 import 'filament_channel.dart';
+import 'package_import.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
@@ -1640,14 +1642,42 @@ class _ModelPageState extends State<ModelPage>
   }
 
   Future<void> _exportCsv() async {
-    final file = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}fbv-spec-${DateTime.now().millisecondsSinceEpoch}.csv',
+    final csv = specCsv(_specs);
+    final name = csvFileName(_session?.summary.name ?? '');
+    if (Platform.isAndroid) {
+      try {
+        final saved = await PackageImport.saveCsv(name: name, text: csv);
+        if (!mounted || saved == null || saved.isEmpty) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(saved)));
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return;
+    }
+    final directory = await showDialog<String>(
+      context: context,
+      builder: (context) => _CsvFolderDialog(strings: widget.strings),
     );
-    await file.writeAsString(specCsv(_specs));
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(file.path)));
+    if (!mounted || directory == null || directory.trim().isEmpty) return;
+    try {
+      final file = writeSpecCsv(
+        directory: directory.trim(),
+        modelName: _session?.summary.name ?? '',
+        csv: csv,
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(file.path)));
+    } on CsvSaveException catch (error) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
   }
 }
 
@@ -1767,6 +1797,52 @@ class _RememberedFieldState extends State<_RememberedField> {
         isDense: widget.dense,
       ),
       onChanged: widget.onChanged,
+    );
+  }
+}
+
+class _CsvFolderDialog extends StatefulWidget {
+  const _CsvFolderDialog({required this.strings});
+
+  final S strings;
+
+  @override
+  State<_CsvFolderDialog> createState() => _CsvFolderDialogState();
+}
+
+class _CsvFolderDialogState extends State<_CsvFolderDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _close(String? value) {
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.strings.exportCsv),
+      content: TextField(
+        key: const ValueKey('csv-folder'),
+        controller: _controller,
+        decoration: InputDecoration(hintText: widget.strings.csvFolder),
+        onSubmitted: _close,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => _close(null),
+          child: Text(widget.strings.cancel),
+        ),
+        FilledButton(
+          onPressed: () => _close(_controller.text),
+          child: Text(widget.strings.csvSave),
+        ),
+      ],
     );
   }
 }

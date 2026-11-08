@@ -32,6 +32,8 @@ class S {
       : 'Delete this package from the device?';
   String get cancel => russian ? 'Отмена' : 'Cancel';
   String get exportCsv => russian ? 'Экспорт CSV' : 'Export CSV';
+  String get csvFolder => russian ? 'Папка для CSV' : 'Folder for the CSV';
+  String get csvSave => russian ? 'Сохранить' : 'Save';
   String get theme => russian ? 'Тема' : 'Theme';
   String get language => russian ? 'Язык' : 'Language';
   String get offline => russian

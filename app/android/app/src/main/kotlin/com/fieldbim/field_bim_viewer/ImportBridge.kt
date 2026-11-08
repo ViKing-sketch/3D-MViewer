@@ -19,10 +19,13 @@ class ImportBridge(
     private val activity: Activity,
     messenger: BinaryMessenger,
     private val launchPicker: () -> Unit,
+    private val launchSave: (String) -> Unit,
 ) {
     private val channel = MethodChannel(messenger, "fbv/import")
     private val main = Handler(Looper.getMainLooper())
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingSave: MethodChannel.Result? = null
+    private var pendingBytes: ByteArray? = null
     private var pendingPath: String? = null
 
     fun attach() {
@@ -35,16 +38,49 @@ class ImportBridge(
                     result.success(path)
                 }
                 "pick" -> {
-                    if (pendingResult != null) {
+                    if (pendingResult != null || pendingSave != null) {
                         result.error("busy", "import already in progress", null)
                     } else {
                         pendingResult = result
                         launchPicker()
                     }
                 }
+                "saveCsv" -> {
+                    val name = call.argument<String>("name") ?: "spec.csv"
+                    val text = call.argument<String>("text") ?: ""
+                    if (pendingResult != null || pendingSave != null) {
+                        result.error("busy", "import already in progress", null)
+                    } else {
+                        pendingSave = result
+                        pendingBytes = text.toByteArray(Charsets.UTF_8)
+                        launchSave(name)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    fun onSavePicked(uri: Uri?) {
+        val result = pendingSave
+        val bytes = pendingBytes
+        pendingSave = null
+        pendingBytes = null
+        if (uri == null || bytes == null) {
+            result?.success(null)
+            return
+        }
+        Thread {
+            try {
+                val output = activity.contentResolver.openOutputStream(uri)
+                    ?: throw IOException("cannot write $uri")
+                output.use { it.write(bytes) }
+                main.post { result?.success(uri.toString()) }
+            } catch (error: Exception) {
+                val message = error.message ?: "save failed"
+                main.post { result?.error("save", message, null) }
+            }
+        }.start()
     }
 
     fun onPicked(uri: Uri?) {
