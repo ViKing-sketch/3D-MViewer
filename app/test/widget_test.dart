@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:field_bim_viewer/main.dart';
 import 'package:field_bim_viewer/src/model.dart';
+import 'package:field_bim_viewer/src/package_plan.dart';
 import 'package:field_bim_viewer/src/model_page.dart';
 import 'package:field_bim_viewer/src/strings.dart';
 import 'package:flutter/material.dart';
@@ -130,6 +131,8 @@ void main() {
     await tester.pumpWidget(FieldBimApp(initialLibrary: library.path));
     await pumpFor(tester, find.text('Sample Project'));
     expect(find.text('Sample Project'), findsOneWidget);
+    expect(find.textContaining('2026-10-31'), findsOneWidget);
+    expect(find.byType(PackagePlan), findsOneWidget);
 
     await tester.tap(find.byTooltip('Удалить'));
     await tester.pump();

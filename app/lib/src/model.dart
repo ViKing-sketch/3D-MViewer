@@ -6,6 +6,8 @@ class PackageSummary {
     required this.elementCount,
     required this.bytes,
     required this.isZip,
+    this.createdUtc,
+    this.plan = const [],
   });
 
   final String path;
@@ -14,6 +16,45 @@ class PackageSummary {
   final int elementCount;
   final int bytes;
   final bool isZip;
+
+  /// `manifest.created_utc` when it parses. Otherwise the package file or
+  /// directory modification time. Null when neither is available.
+  final DateTime? createdUtc;
+
+  /// Top-down boxes from `elements.bbox_*` in world metres. Zero-area rows
+  /// are omitted. This is not a rendered view and not a thumbnail file:
+  /// format_version 1 does not write `thumbs/`.
+  final List<PlanBox> plan;
+}
+
+/// One element footprint for the library plan. Colors are 0..1.
+class PlanBox {
+  const PlanBox({
+    required this.minX,
+    required this.minY,
+    required this.maxX,
+    required this.maxY,
+    required this.red,
+    required this.green,
+    required this.blue,
+  });
+
+  final double minX;
+  final double minY;
+  final double maxX;
+  final double maxY;
+  final double red;
+  final double green;
+  final double blue;
+}
+
+/// UTC calendar day, `YYYY-MM-DD`. Empty when [created] is null.
+String libraryDateLabel(DateTime? created) {
+  if (created == null) return '';
+  final utc = created.toUtc();
+  final month = utc.month.toString().padLeft(2, '0');
+  final day = utc.day.toString().padLeft(2, '0');
+  return '${utc.year}-$month-$day';
 }
 
 class SpatialNode {
@@ -117,7 +158,9 @@ class SpecRow {
 }
 
 String specCsv(List<SpecRow> rows) {
-  final buffer = StringBuffer('storey,class,type,material,count,quantity_kind,quantity_sum\n');
+  final buffer = StringBuffer(
+    'storey,class,type,material,count,quantity_kind,quantity_sum\n',
+  );
   for (final row in rows) {
     buffer.write(_csv(row.storeyName));
     buffer.write(',');

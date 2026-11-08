@@ -143,16 +143,17 @@ class PackageSession {
         db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
     final source = (manifest['source'] as Map?) ?? const {};
     final bytes = _partBytes(manifest);
+    final storedAt = displayPath ?? root.path;
     return PackageSession._(
       PackageSummary(
-        path: displayPath ?? root.path,
-        name:
-            (manifest['name'] as String?) ??
-            p.basename(displayPath ?? root.path),
+        path: storedAt,
+        name: (manifest['name'] as String?) ?? p.basename(storedAt),
         schema: (source['schema'] as String?) ?? '',
         elementCount: count,
         bytes: bytes,
         isZip: isZip,
+        createdUtc: packageCreated(manifest, storedAt),
+        plan: _planBoxes(db),
       ),
       db,
       deleteOnClose,
@@ -400,6 +401,62 @@ ORDER BY s.id
       temp.deleteSync(recursive: true);
     }
   }
+}
+
+/// Manifest creation time, else the package file or folder modification time.
+DateTime? packageCreated(Map<String, dynamic> manifest, String path) {
+  final raw = manifest['created_utc'];
+  if (raw is String && raw.isNotEmpty) {
+    final parsed = DateTime.tryParse(raw);
+    if (parsed != null) return parsed.toUtc();
+  }
+  try {
+    final type = FileSystemEntity.typeSync(path);
+    if (type == FileSystemEntityType.file) {
+      return File(path).lastModifiedSync().toUtc();
+    }
+    if (type == FileSystemEntityType.directory) {
+      return Directory(path).statSync().modified.toUtc();
+    }
+  } catch (_) {}
+  return null;
+}
+
+List<PlanBox> _planBoxes(Database db) {
+  final rows = db.select('''
+SELECT bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y, color_r, color_g, color_b
+FROM elements
+ORDER BY id
+''');
+  final boxes = <PlanBox>[];
+  for (final row in rows) {
+    final minX = row.columnAt(0);
+    final minY = row.columnAt(1);
+    final maxX = row.columnAt(2);
+    final maxY = row.columnAt(3);
+    if (minX is! num || minY is! num || maxX is! num || maxY is! num) continue;
+    if ((maxX - minX).abs() < 1e-6 || (maxY - minY).abs() < 1e-6) continue;
+    boxes.add(
+      PlanBox(
+        minX: minX.toDouble(),
+        minY: minY.toDouble(),
+        maxX: maxX.toDouble(),
+        maxY: maxY.toDouble(),
+        red: _unit(row.columnAt(4)),
+        green: _unit(row.columnAt(5)),
+        blue: _unit(row.columnAt(6)),
+      ),
+    );
+  }
+  return boxes;
+}
+
+double _unit(Object? value) {
+  if (value is! num) return 0.6;
+  final number = value.toDouble();
+  if (number < 0) return 0;
+  if (number > 1) return 1;
+  return number;
 }
 
 List<PackageSummary> scanLibrary(String directory) {
