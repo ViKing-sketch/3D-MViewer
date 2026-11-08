@@ -19,8 +19,9 @@ class S {
       ? 'Нажмите, чтобы показать заглушку и загрузить её GLB'
       : 'Tap to frame a stand-in and stream its GLB';
   String get propertySearch => russian ? 'Поиск свойства' : 'Search properties';
-  String get searchHint =>
-      russian ? 'Имя, марка, GlobalId' : 'Name, tag, GlobalId';
+  String get searchHint => russian
+      ? 'Имя, марка, GlobalId, свойство'
+      : 'Name, tag, GlobalId, property';
   String get renderStub => russian
       ? '3D-рендер Filament работает на Android. Здесь доступны дерево, свойства и спецификация.'
       : 'The Filament renderer runs on Android. The tree, properties and specification are available here.';

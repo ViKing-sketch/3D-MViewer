@@ -31,6 +31,7 @@ class _ModelPageState extends State<ModelPage>
   String? _error;
   int? _selectedId;
   String _query = '';
+  Set<int>? _searchIds;
   SceneFilter _filter = const SceneFilter();
   final Set<int> _hidden = {};
   final Set<int> _isolated = {};
@@ -170,12 +171,54 @@ class _ModelPageState extends State<ModelPage>
 
   bool _visible(ElementInfo element) {
     if (!_filter.matches(element)) return false;
-    if (_query.trim().isEmpty) return true;
-    final query = _query.trim().toLowerCase();
-    return element.name.toLowerCase().contains(query) ||
-        element.tag.toLowerCase().contains(query) ||
-        element.guid.toLowerCase().contains(query) ||
-        element.ifcClass.toLowerCase().contains(query);
+    final hits = _searchIds;
+    if (hits != null && !hits.contains(element.id)) return false;
+    return true;
+  }
+
+  void _onSearch(String value) {
+    final session = _session;
+    final trimmed = value.trim();
+    final Set<int>? hits = trimmed.isEmpty || session == null
+        ? null
+        : session.searchIds(trimmed).toSet();
+    setState(() {
+      final changed = !_sameSearch(_searchIds, hits);
+      _query = value;
+      _searchIds = hits;
+      if (hits != null) {
+        _isolated.removeWhere(
+          (id) => !hits.contains(id) || !_idMatchesFilter(id),
+        );
+        final selected = _selectedId;
+        if (selected != null &&
+            (!hits.contains(selected) || !_idMatchesFilter(selected))) {
+          _selectedId = null;
+          _xray = false;
+        }
+        if (hits.length == 1 && _idMatchesFilter(hits.first)) {
+          _selectedId = hits.first;
+          if (changed) _frameToken++;
+        } else if (changed) {
+          _fitToken++;
+        }
+      } else if (changed) {
+        _fitToken++;
+      }
+      _renderRevision++;
+    });
+  }
+
+  bool _sameSearch(Set<int>? a, Set<int>? b) {
+    if (a == null || b == null) return a == null && b == null;
+    return _sameIds(a, b);
+  }
+
+  bool _idMatchesFilter(int id) {
+    for (final element in _elements) {
+      if (element.id == id) return _filter.matches(element);
+    }
+    return false;
   }
 
   void _choose(int? id) {
@@ -260,6 +303,8 @@ class _ModelPageState extends State<ModelPage>
       _hidden.clear();
       _isolated.clear();
       _filter = const SceneFilter();
+      _query = '';
+      _searchIds = null;
       _xray = false;
       _section = const SectionView();
       _renderRevision++;
@@ -272,9 +317,10 @@ class _ModelPageState extends State<ModelPage>
     setState(() {
       _filter = next;
       final kept = isolateWithin(_isolated, _elements, next);
+      final hits = _searchIds;
       _isolated
         ..clear()
-        ..addAll(kept);
+        ..addAll(hits == null ? kept : kept.where((id) => hits.contains(id)));
       if (_selectedId != null && !_selectedMatches(next)) {
         _selectedId = null;
         _xray = false;
@@ -765,7 +811,7 @@ class _ModelPageState extends State<ModelPage>
       child: _RememberedField(
         value: _query,
         hint: strings.searchHint,
-        onChanged: (value) => setState(() => _query = value),
+        onChanged: _onSearch,
       ),
     );
   }
@@ -1150,6 +1196,7 @@ class _ModelPageState extends State<ModelPage>
         elements: _elements,
         filter: _filter,
         hidden: _hidden,
+        searchIds: _searchIds,
       ),
       isolatedIds: _isolated,
       xray: _xray,
@@ -1188,7 +1235,11 @@ class _ModelPageState extends State<ModelPage>
     if (_standIns.isEmpty) return const [];
     final strings = widget.strings;
     final known = {for (final element in _elements) element.id: element};
-    final ids = _standIns.toList()..sort();
+    final ids = [
+      for (final id in _standIns)
+        if (_standInListed(id, known[id])) id,
+    ]..sort();
+    if (ids.isEmpty) return const [];
     return [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1210,6 +1261,13 @@ class _ModelPageState extends State<ModelPage>
           onTap: () => _jumpTo(id),
         ),
     ];
+  }
+
+  bool _standInListed(int id, ElementInfo? element) {
+    if (element != null) return _visible(element);
+    if (_filter.active) return false;
+    final hits = _searchIds;
+    return hits == null || hits.contains(id);
   }
 
   String _elementLabel(ElementInfo? element, int id) {

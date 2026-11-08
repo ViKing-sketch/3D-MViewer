@@ -89,7 +89,7 @@ void main() {
     await tester.enterText(
       find.byWidgetPredicate((widget) {
         return widget is TextField &&
-            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+            widget.decoration?.hintText == const S(true).searchHint;
       }),
       'W-1',
     );
@@ -209,7 +209,7 @@ void main() {
     await tester.tap(
       find.byWidgetPredicate((widget) {
         return widget is TextField &&
-            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+            widget.decoration?.hintText == const S(true).searchHint;
       }),
     );
     await tester.pump();
@@ -257,7 +257,7 @@ void main() {
     await tester.enterText(
       find.byWidgetPredicate((widget) {
         return widget is TextField &&
-            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+            widget.decoration?.hintText == const S(true).searchHint;
       }),
       'Column',
     );
@@ -267,7 +267,7 @@ void main() {
     final field = tester.widget<TextField>(
       find.byWidgetPredicate((widget) {
         return widget is TextField &&
-            widget.decoration?.hintText == 'Имя, марка, GlobalId';
+            widget.decoration?.hintText == const S(true).searchHint;
       }),
     );
     expect(field.controller?.text, 'Column');
@@ -400,6 +400,51 @@ void main() {
       find.byKey(const ValueKey('storey-all')),
     );
     expect(storeyAll.selected, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a property value search selects that element', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sample = _repoFile('testdata/sample_model');
+    await tester.pumpWidget(FieldBimApp(autoOpenPath: sample));
+    await tester.pump();
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == const S(true).searchHint;
+      }),
+      'НС-12',
+    );
+    await tester.pump();
+    expect(find.text('Wall W-1'), findsWidgets);
+    expect(find.text('Column C-1'), findsNothing);
+    expect(find.text('Slab S-1'), findsNothing);
+    expect(find.text('Marker no geom'), findsNothing);
+
+    await tester.tap(find.text('3D'));
+    await tester.pumpAndSettle();
+    expect(find.text('Выберите элемент'), findsNothing);
+    expect(find.text('Wall W-1'), findsWidgets);
+
+    await tester.tap(find.byTooltip('Действия'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Показать всё'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Дерево'));
+    await tester.pumpAndSettle();
+    expect(find.text('Column C-1'), findsOneWidget);
+    final field = tester.widget<TextField>(
+      find.byWidgetPredicate((widget) {
+        return widget is TextField &&
+            widget.decoration?.hintText == const S(true).searchHint;
+      }),
+    );
+    expect(field.controller?.text, isEmpty);
     expect(tester.takeException(), isNull);
   });
 }

@@ -122,6 +122,24 @@ void main() {
       ),
       {3},
     );
+    expect(
+      viewerHidden(
+        elements: elements,
+        filter: const SceneFilter(storeyId: 4),
+        hidden: const {},
+        searchIds: {1},
+      ),
+      {2, 3, 4},
+    );
+    expect(
+      viewerHidden(
+        elements: elements,
+        filter: const SceneFilter(),
+        hidden: const {},
+        searchIds: {},
+      ),
+      {1, 2, 3, 4},
+    );
   });
 
   test('isolate drops elements the filter rejects', () {
