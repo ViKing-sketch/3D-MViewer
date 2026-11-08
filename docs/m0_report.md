@@ -1,6 +1,6 @@
 # M0. Прототип on-device OCCT и бенчмарк конвертера
 
-Статус on-device: **не выполнялся**.
+Статус on-device: полный прототип M0 (STEP через XDE, два устройства, три модели, FPS) **не выполнялся**. Отдельно собраны библиотеки моделирования OCCT 7.8.1 под Android NDK и выполнен один прогон коробки. Формат `brep.pack` не менялся.
 
 Бенчмарк конвертера на ПК — вывод `fbvconv --stats --json <файл>`. Это не замер on-device OCCT из таблицы ниже, а числа для выбора мешера и оценки памяти на хосте. Поля JSON:
 
@@ -49,9 +49,28 @@
 
 # Прототип on-device OCCT
 
-ТЗ (этап M0) требует сборку OCCT 7.8.1 под Android NDK, импорт STEP через XDE на устройстве и сравнение с заранее сконвертированным GLB в Filament. Нужны не меньше двух устройств и трёх моделей (малая / средняя / крупная). В этой среде нет NDK-сборки OCCT и нет прогона на устройствах, поэтому решения go/no-go по объёму OCCT на устройстве нет. Числовые цели раздела 9 ТЗ остаются допущениями [П].
+ТЗ (этап M0) требует сборку OCCT 7.8.1 под Android NDK, импорт STEP через XDE на устройстве и сравнение с заранее сконвертированным GLB в Filament. Нужны не меньше двух устройств и трёх моделей (малая / средняя / крупная). STEP, XDE и Filament в этой проверке не запускались. Решения go/no-go по объёму OCCT на телефоне нет. Числовые цели раздела 9 ТЗ остаются допущениями [П].
 
-Пресет CMake `android-arm64` подключает toolchain NDK (`ANDROID_NDK_HOME`) и останавливается с понятной ошибкой, если NDK нет. Superbuild хоста описан в `deps/CMakeLists.txt` и включается `FBV_WITH_IFCOPENSHELL`.
+Пресет CMake `android-arm64` подключает toolchain NDK (`ANDROID_NDK_HOME`) и останавливается с понятной ошибкой, если NDK нет. Superbuild хоста описан в `deps/CMakeLists.txt` и включается `FBV_WITH_IFCOPENSHELL`. Он не является Android-сборкой.
+
+## Проверка OCCT 7.8.1 на Android
+
+Скрипт `tools/android_occt_probe/build_android.sh` качает метку OCCT `V7_8_1` (sha256 `7321af48c34dc253bf8aae3f0430e8cb10976961d534d8509e72516978aa82f5`) и собирает разделяемые библиотеки модулей FoundationClasses, ModelingData и ModelingAlgorithms. Draw, Visualization, DataExchange и ApplicationFramework выключены, поэтому TKDESTEP и XDE в замер не входят. Проба `occt_probe` строит коробку 1×2×3 м, считает точный объём и площадь и записывает форму через BinTools во временный файл, который тут же удаляет. В пакет `.fbvpkg` эта запись не попадает.
+
+Сборка: NDK `28.2.13676358` (Clang 19.0.1), тот же NDK, что закреплён во Flutter 3.44. `ANDROID_PLATFORM=android-28`. В заметке ELF первый dword равен `0x1c`, то есть API 28. Это не minSdk приложения: в `app/android/app/build.gradle.kts` стоит `maxOf(24, flutter.minSdkVersion)`, у Flutter 3.44 это 24. Пресет `android-arm64` по-прежнему задаёт `android-26`.
+
+| Что измерено | arm64-v8a, только сборка | x86_64, сборка и прогон |
+| --- | ---: | ---: |
+| Сумма всех собранных `libTK*.so` | 36 977 664 байт | 39 346 584 байт |
+| Девять `libTK*.so`, которые проба реально загружает | 19 462 072 байт | 21 141 176 байт |
+| `libc++_shared.so` из NDK | 9 236 352 байт | 8 808 664 байт |
+| Сам `occt_probe` | 176 424 байт | 164 912 байт |
+
+Загружаемые библиотеки пробы: `libTKernel.so`, `libTKMath.so`, `libTKG2d.so`, `libTKG3d.so`, `libTKGeomBase.so`, `libTKBRep.so`, `libTKGeomAlgo.so`, `libTKTopAlgo.so`, `libTKPrim.so`, плюс `libc.so`, `libm.so`, `libdl.so`, `liblog.so` и `libc++_shared.so`. Freetype, OpenGL и TBB в этой сборке нет. `libTKBO.so`, `libTKShHealing.so`, `libTKMesh.so` и соседние библиотеки модуля собраны и входят в первую строку таблицы, но эта проба их не загружала.
+
+Прогон был один, и только для x86_64. Эмулятор Android SDK, API 28, Android 9, ABI `x86_64`, модель «Android SDK built for x86_64», hardware `ranchu`. Эмулятор поднял гостевую память до 1536 МБ. Это не устройство уровня Galaxy Note 10+ и не arm64. Вывод пробы: `volume_m3=6`, `area_m2=22`, `bintools_bytes=4494`, `elapsed_us=704`, `rss_hwm_kb=12892`. Объём и площадь совпали с точными 6 м³ и 22 м² до и после чтения BinTools. 704 мкс и 12 892 КБ — время и пик RSS этого процесса на одной коробке, не на модели здания. Бинарник arm64-v8a собран и на Android не запускался. Образ `system-images;android-28;google_apis;arm64-v8a` скачан, но эмулятор 37.2.13 на этом хосте x86_64 отказался его включить: `Avd's CPU Architecture 'arm64' is not supported`.
+
+Таблица ниже остаётся пустой: колонки STEP, триангуляции модели и FPS не измерялись.
 
 Когда прогон появится, отчёт заполняется так:
 
