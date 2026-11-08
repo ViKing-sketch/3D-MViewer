@@ -71,16 +71,24 @@ List<String> materialsOf(Iterable<ElementInfo> elements) {
   return names;
 }
 
-/// Ids the viewer must hide: the manual set plus anything outside [filter].
+/// Ids the viewer must hide: the manual set, anything outside [filter], and
+/// anything outside [searchIds] when a search is active.
+///
+/// A null [searchIds] does not limit the scene. An empty set hides every
+/// element, which is a search that matched nothing.
 Set<int> viewerHidden({
   required Iterable<ElementInfo> elements,
   required SceneFilter filter,
   required Set<int> hidden,
+  Set<int>? searchIds,
 }) {
   final out = <int>{...hidden};
-  if (!filter.active) return out;
+  if (!filter.active && searchIds == null) return out;
   for (final element in elements) {
     if (!filter.matches(element)) out.add(element.id);
+    if (searchIds != null && !searchIds.contains(element.id)) {
+      out.add(element.id);
+    }
   }
   return out;
 }

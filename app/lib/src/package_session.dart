@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
+import 'fts_query.dart';
 import 'model.dart';
 import 'sqlite_setup.dart';
 import 'text_bytes.dart';
@@ -210,6 +211,25 @@ class PackageSession {
           elevation: (row.columnAt(4) as num?)?.toDouble() ?? 0,
         ),
     ];
+  }
+
+  /// Element ids whose FTS row matches [query].
+  ///
+  /// The index covers name, tag, GlobalId, type name, and property text.
+  /// An empty query returns no ids; the caller treats that as "no search".
+  /// A MATCH the tokenizer rejects also returns no ids.
+  List<int> searchIds(String query) {
+    final match = ftsMatchExpression(query);
+    if (match == null) return const [];
+    try {
+      final rows = _db.select(
+        'SELECT element_id FROM fts_elements WHERE fts_elements MATCH ?1 ORDER BY element_id',
+        [match],
+      );
+      return [for (final row in rows) row.columnAt(0) as int];
+    } on SqliteException {
+      return const [];
+    }
   }
 
   List<ElementInfo> elements() {
