@@ -29,6 +29,7 @@ class _ModelPageState extends State<ModelPage>
     with SingleTickerProviderStateMixin {
   PackageSession? _session;
   List<SpatialNode> _spatial = const [];
+  List<SystemInfo> _systems = const [];
   List<ElementInfo> _elements = const [];
   List<ElementBox> _boxes = const [];
   List<SpecRow> _specs = const [];
@@ -86,6 +87,7 @@ class _ModelPageState extends State<ModelPage>
       final session = PackageSession.openPath(widget.path);
       _session = session;
       _spatial = session.spatial();
+      _systems = session.systems();
       _elements = session.elements();
       _boxes = session.elementBoxes();
       _specs = session.specifications();
@@ -123,6 +125,7 @@ class _ModelPageState extends State<ModelPage>
       setState(() {
         _session = session;
         _spatial = session.spatial();
+        _systems = session.systems();
         _elements = session.elements();
         _boxes = session.elementBoxes();
         _specs = session.specifications();
@@ -1021,6 +1024,28 @@ class _ModelPageState extends State<ModelPage>
                 selected: _filter.material == name,
                 onSelected: () => _applyFilter(
                   _filter.copyWith(material: name),
+                  refresh: refresh,
+                ),
+              ),
+          ]),
+        if (_systems.isNotEmpty)
+          _chipStrip([
+            _filterChip(
+              key: const ValueKey('system-all'),
+              label: strings.allSystems,
+              selected: _filter.systemId == null,
+              onSelected: () => _applyFilter(
+                _filter.copyWith(clearSystem: true),
+                refresh: refresh,
+              ),
+            ),
+            for (final system in _systems)
+              _filterChip(
+                key: ValueKey('system-${system.id}'),
+                label: system.name.isEmpty ? system.ifcClass : system.name,
+                selected: _filter.systemId == system.id,
+                onSelected: () => _applyFilter(
+                  _filter.copyWith(systemId: system.id),
                   refresh: refresh,
                 ),
               ),

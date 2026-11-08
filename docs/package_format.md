@@ -1,4 +1,4 @@
-# Формат пакета `.fbvpkg` (format_version 1)
+# Формат пакета `.fbvpkg` (format_version 1 и 2)
 
 Пакет — результат конвертера `fbvconv`. Это либо ZIP без сжатия (метод STORE), либо каталог с тем же составом. Имя файла обычно заканчивается на `.fbvpkg`. Версия задаётся полем `format_version` в `manifest.json`. Читатель обязан отвергнуть неизвестную версию.
 
@@ -89,7 +89,7 @@ model.fbvpkg
 
 ## meta.sqlite
 
-SQLite с FTS5. `schema_meta.format_version = 1`.
+SQLite с FTS5. `schema_meta.format_version` равен `1` у старого пакета и `2` у нового. Таблицы ниже — общие; `systems` и `system_elements` есть только у версии 2, см. раздел format_version 2.
 
 | Таблица | Назначение |
 | --- | --- |
@@ -142,17 +142,48 @@ SQLite с FTS5. `schema_meta.format_version = 1`.
 
 `elements.brep_ref` — номер записи с нуля.
 
-Это не BinTools OCCT. Когда появится OCCT, кодек `bintools-zstd-v1` потребует `format_version` 2, если разметка записи станет несовместимой. Читатель версии 1 открывает пакет с неизвестным кодеком (свойства доступны) и возвращает ошибку на запрос точной геометрии.
+Это не BinTools OCCT. `format_version` 2 занят таблицами систем, а не B-Rep. Когда появится OCCT, кодек `bintools-zstd-v1` потребует следующую `format_version`, если разметка записи станет несовместимой. Читатель открывает пакет с неизвестным кодеком (свойства доступны) и возвращает ошибку на запрос точной геометрии.
 
 ## ZIP
 
 Метод STORE, флаг UTF-8 (бит 11), без ZIP64. Имена с `/`, без `..`. Каталог и ZIP равноправны: `fbv_package_open` и `pkg_validate` принимают оба. При открытии ZIP SQLite и меши распаковываются во временный каталог; потоковое чтение STORE по смещению — следующая оптимизация для крупных пакетов.
 
+## format_version 2
+
+Новый пакет пишет `format_version` 2. Читатель открывает 1 и 2. Любая другая версия — ошибка с номером версии, пакет не открывается.
+
+Версия 1 не содержит таблиц систем. Такой пакет открывается, список систем пуст, фильтр системы в просмотре не предлагается. Читатель не переписывает пакет версии 1 и не подменяет отсутствие таблиц пустым списком у версии 2.
+
+Версия 2 добавляет в `meta.sqlite`:
+
+```sql
+CREATE TABLE systems(
+  id INTEGER PRIMARY KEY,
+  guid TEXT,
+  ifc_class TEXT NOT NULL,
+  name TEXT,
+  description TEXT
+);
+
+CREATE TABLE system_elements(
+  system_id INTEGER NOT NULL,
+  element_id INTEGER NOT NULL,
+  PRIMARY KEY (system_id, element_id)
+);
+```
+
+`schema_meta.format_version` совпадает с manifest (`1` или `2`). У версии 2 отсутствие `systems` или `system_elements` — ошибка, а не «систем нет».
+
+Конвертер пишет `IfcSystem`, `IfcDistributionSystem` и `IfcBuildingSystem`. Состав берётся из `IfcRelAssignsToGroup`: элемент может входить в несколько систем. `IfcZone` в этот список не входит. `system_elements.element_id` — id строки `elements`, не STEP-id.
+
+`testdata/sample_model` и `testdata/sample_wall.fbvpkg` остаются версией 1.
+
 ## Проверка
 
 `pkg_validate <пакет>` и `fbvconv --validate <пакет>` возвращают 0, если:
 
-* `format_version` равен 1;
+* `format_version` равен 1 или 2, а `schema_meta.format_version` ему равен;
+* у версии 2 есть таблицы `systems` и `system_elements`;
 * каждый файл из `parts` существует, размер и SHA-256 совпадают;
 * счётчики manifest совпадают с `meta.sqlite`;
 * GUID элементов непусты и уникальны;

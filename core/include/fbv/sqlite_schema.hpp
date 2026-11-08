@@ -2,13 +2,15 @@
 
 namespace fbv {
 
-// meta.sqlite schema for format_version 1. See docs/package_format.md.
+// meta.sqlite schema written for format_version 2.
+// A format_version 1 package has the same tables except systems and
+// system_elements, and schema_meta.format_version = '1'. See docs/package_format.md.
 inline constexpr const char* kSqliteSchema = R"SQL(
 CREATE TABLE schema_meta(
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT INTO schema_meta(key, value) VALUES ('format_version', '1');
+INSERT INTO schema_meta(key, value) VALUES ('format_version', '2');
 
 CREATE TABLE spatial(
   id INTEGER PRIMARY KEY,
@@ -142,6 +144,22 @@ CREATE INDEX idx_quantities_element ON quantities(element_id);
 CREATE INDEX idx_layers_set ON material_layers(set_id);
 CREATE INDEX idx_class_element ON classification(element_id);
 CREATE INDEX idx_spatial_parent ON spatial(parent_id);
+
+CREATE TABLE systems(
+  id INTEGER PRIMARY KEY,
+  guid TEXT,
+  ifc_class TEXT NOT NULL,
+  name TEXT,
+  description TEXT
+);
+
+CREATE TABLE system_elements(
+  system_id INTEGER NOT NULL,
+  element_id INTEGER NOT NULL,
+  PRIMARY KEY (system_id, element_id)
+);
+
+CREATE INDEX idx_system_elements_element ON system_elements(element_id);
 )SQL";
 
 }  // namespace fbv

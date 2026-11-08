@@ -75,6 +75,20 @@ class SpatialNode {
   final double elevation;
 }
 
+class SystemInfo {
+  SystemInfo({
+    required this.id,
+    required this.name,
+    required this.ifcClass,
+    required this.guid,
+  });
+
+  final int id;
+  final String name;
+  final String ifcClass;
+  final String guid;
+}
+
 class ElementInfo {
   ElementInfo({
     required this.id,
@@ -86,6 +100,7 @@ class ElementInfo {
     required this.typeName,
     required this.material,
     required this.guid,
+    this.systemIds = const [],
   });
 
   final int id;
@@ -97,6 +112,10 @@ class ElementInfo {
   final String typeName;
   final String material;
   final String guid;
+
+  /// Package system ids. Empty when the element is in none, including every
+  /// element of a format_version 1 package.
+  final List<int> systemIds;
 }
 
 class PropInfo {

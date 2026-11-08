@@ -884,6 +884,39 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
     }
   }
 
+  std::vector<const IfcEntity*> system_entities;
+  for (const char* type : {"IFCSYSTEM", "IFCDISTRIBUTIONSYSTEM", "IFCBUILDINGSYSTEM"}) {
+    for (const IfcEntity* entity : file.typed(type)) system_entities.push_back(entity);
+  }
+  std::sort(system_entities.begin(), system_entities.end(),
+            [](const IfcEntity* a, const IfcEntity* b) { return a->id < b->id; });
+  std::unordered_map<std::int64_t, std::size_t> system_index;
+  for (const IfcEntity* entity : system_entities) {
+    SystemInfo system;
+    system.ifc_id = entity->id;
+    system.id = static_cast<std::int64_t>(scene.systems.size() + 1);
+    system.guid = str_at(*entity, 0);
+    system.ifc_class = class_name(entity->type);
+    system.name = str_at(*entity, 2);
+    system.description = str_at(*entity, 3);
+    system_index[system.ifc_id] = scene.systems.size();
+    scene.systems.push_back(std::move(system));
+  }
+  for (const IfcEntity* rel : file.typed("IFCRELASSIGNSTOGROUP")) {
+    const auto system_it = system_index.find(ref_at(*rel, 6));
+    if (system_it == system_index.end()) continue;
+    SystemInfo& system = scene.systems[system_it->second];
+    for (std::int64_t target : refs_of(attr(*rel, 4))) {
+      const auto element_it = element_index.find(target);
+      if (element_it == element_index.end()) continue;
+      const std::int64_t element_id = scene.elements[element_it->second].id;
+      if (std::find(system.element_ids.begin(), system.element_ids.end(), element_id) !=
+          system.element_ids.end())
+        continue;
+      system.element_ids.push_back(element_id);
+    }
+  }
+
   const auto geometry_started = std::chrono::steady_clock::now();
   if (options.mesher != "analytic") apply_ifcopenshell_geometry(scene, ifc_text, options);
   if (!scene.ifcopenshell_ran && !file.typed("IFCOPENINGELEMENT").empty()) {

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <set>
+#include <string>
 
 namespace fbv {
 
@@ -551,7 +552,8 @@ fbv_package* fbv_package_open_impl(const char* path, std::string& error) {
   }
   if (!fbv::Json::parse(manifest_text, package->manifest, error)) return nullptr;
   const fbv::Json* version = fbv::field(package->manifest, "format_version");
-  if (version == nullptr || version->as_int(0) != FBV_FORMAT_VERSION) {
+  const auto format_version = version == nullptr ? std::int64_t{-1} : version->as_int(-1);
+  if (format_version < FBV_FORMAT_VERSION_MIN || format_version > FBV_FORMAT_VERSION) {
     error = "unsupported format_version";
     return nullptr;
   }
@@ -559,9 +561,19 @@ fbv_package* fbv_package_open_impl(const char* path, std::string& error) {
   try {
     package->db.open(package->root / "meta.sqlite", false);
     auto meta = package->db.prepare("SELECT value FROM schema_meta WHERE key = 'format_version'");
-    if (!meta.step_row() || meta.column_text(0) != "1") {
-      error = "meta.sqlite schema_meta format_version is not 1";
+    if (!meta.step_row() || meta.column_text(0) != std::to_string(format_version)) {
+      error = "meta.sqlite schema_meta format_version does not match the manifest";
       return nullptr;
+    }
+    if (format_version >= 2) {
+      auto systems = package->db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'systems'");
+      auto members = package->db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'system_elements'");
+      if (!systems.step_row() || !members.step_row()) {
+        error = "format_version 2 is missing table systems or system_elements";
+        return nullptr;
+      }
     }
   } catch (const std::exception& ex) {
     error = ex.what();

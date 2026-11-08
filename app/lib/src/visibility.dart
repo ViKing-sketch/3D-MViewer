@@ -1,23 +1,35 @@
 import 'model.dart';
 
-/// Storey, IFC class and material limits for the tree and the 3D scene.
+/// Storey, IFC class, material and system limits for the tree and the 3D scene.
 ///
 /// A null field means that dimension is not limited. An empty [material] is a
-/// real value: elements whose package material is blank. Engineering systems
-/// are not a field here. format_version 1 does not store IfcSystem membership.
+/// real value: elements whose package material is blank. [systemId] is a row
+/// in `systems`. An element matches when that id is in [ElementInfo.systemIds].
+/// format_version 1 has no membership, so the viewer does not offer a system chip.
 class SceneFilter {
-  const SceneFilter({this.storeyId, this.ifcClass, this.material});
+  const SceneFilter({
+    this.storeyId,
+    this.ifcClass,
+    this.material,
+    this.systemId,
+  });
 
   final int? storeyId;
   final String? ifcClass;
   final String? material;
+  final int? systemId;
 
-  bool get active => storeyId != null || ifcClass != null || material != null;
+  bool get active =>
+      storeyId != null ||
+      ifcClass != null ||
+      material != null ||
+      systemId != null;
 
   bool matches(ElementInfo element) {
     if (storeyId != null && element.storeyId != storeyId) return false;
     if (ifcClass != null && element.ifcClass != ifcClass) return false;
     if (material != null && element.material != material) return false;
+    if (systemId != null && !element.systemIds.contains(systemId)) return false;
     return true;
   }
 
@@ -25,14 +37,17 @@ class SceneFilter {
     int? storeyId,
     String? ifcClass,
     String? material,
+    int? systemId,
     bool clearStorey = false,
     bool clearClass = false,
     bool clearMaterial = false,
+    bool clearSystem = false,
   }) {
     return SceneFilter(
       storeyId: clearStorey ? null : (storeyId ?? this.storeyId),
       ifcClass: clearClass ? null : (ifcClass ?? this.ifcClass),
       material: clearMaterial ? null : (material ?? this.material),
+      systemId: clearSystem ? null : (systemId ?? this.systemId),
     );
   }
 
@@ -41,11 +56,12 @@ class SceneFilter {
     return other is SceneFilter &&
         other.storeyId == storeyId &&
         other.ifcClass == ifcClass &&
-        other.material == material;
+        other.material == material &&
+        other.systemId == systemId;
   }
 
   @override
-  int get hashCode => Object.hash(storeyId, ifcClass, material);
+  int get hashCode => Object.hash(storeyId, ifcClass, material, systemId);
 }
 
 /// Storeys in elevation order, then name, then id.

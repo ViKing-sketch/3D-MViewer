@@ -566,6 +566,28 @@ void write_sqlite(const Scene& scene, const std::filesystem::path& path) {
     sqlite3_clear_bindings(insert_fts.get());
   }
 
+  auto insert_system =
+      db.prepare("INSERT INTO systems(id, guid, ifc_class, name, description) VALUES (?,?,?,?,?)");
+  auto insert_member =
+      db.prepare("INSERT INTO system_elements(system_id, element_id) VALUES (?,?)");
+  for (const SystemInfo& system : scene.systems) {
+    insert_system.bind_int64(1, system.id);
+    insert_system.bind_text(2, system.guid);
+    insert_system.bind_text(3, system.ifc_class);
+    insert_system.bind_text(4, system.name);
+    insert_system.bind_text(5, system.description);
+    insert_system.step_done();
+    sqlite3_reset(insert_system.get());
+    sqlite3_clear_bindings(insert_system.get());
+    for (std::int64_t element_id : system.element_ids) {
+      insert_member.bind_int64(1, system.id);
+      insert_member.bind_int64(2, element_id);
+      insert_member.step_done();
+      sqlite3_reset(insert_member.get());
+      sqlite3_clear_bindings(insert_member.get());
+    }
+  }
+
   struct CountKey {
     std::int64_t storey = 0;
     std::string ifc_class;

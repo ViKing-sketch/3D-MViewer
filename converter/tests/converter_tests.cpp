@@ -1,6 +1,7 @@
 #include "fbv/convert.hpp"
 #include "fbv/glb.hpp"
 #include "fbv/io.hpp"
+#include "fbv/sha256.hpp"
 #include "fbv/sqlite_util.hpp"
 #include "fbv_core.h"
 #include "ifc_parse.hpp"
@@ -127,7 +128,7 @@ int main() {
   if (package != nullptr) {
     fbv_manifest_info info{};
     CHECK(fbv_package_manifest(package, &info) == FBV_OK);
-    CHECK(info.format_version == 1);
+    CHECK(info.format_version == 2);
     CHECK(std::string(info.name) == "Sample Project");
     CHECK(std::string(info.source_schema) == "IFC4");
     CHECK(std::string(info.length_unit) == "millimetre");
@@ -593,6 +594,107 @@ END-ISO-10303-21;
     CHECK(many_json.find("\"mesh_budget_bytes\"") != std::string::npos);
     std::string many_report;
     CHECK(fbv::validate_package(many.output, many_report) == 0);
+  }
+
+  {
+    char legacy_err[512] = {};
+    fbv_package* legacy = fbv_package_open((testdata / "sample_model").string().c_str(), legacy_err,
+                                           sizeof(legacy_err));
+    if (legacy == nullptr) std::cerr << legacy_err << "\n";
+    CHECK(legacy != nullptr);
+    if (legacy != nullptr) {
+      fbv_manifest_info legacy_info{};
+      CHECK(fbv_package_manifest(legacy, &legacy_info) == FBV_OK);
+      CHECK(legacy_info.format_version == 1);
+      fbv_package_close(legacy);
+    }
+    std::string legacy_report;
+    CHECK(fbv::validate_package((testdata / "sample_model").string(), legacy_report) == 0);
+
+    std::ostringstream ifc;
+    ifc << "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition "
+           "[CoordinationView]'),'2;1');\n";
+    ifc << "FILE_NAME('systems.ifc','2026-11-08T00:00:00',(''),(''),'fbv','fbv','');\n";
+    ifc << "FILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n";
+    ifc << "#1=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);\n";
+    ifc << "#2=IFCUNITASSIGNMENT((#1));\n";
+    ifc << "#3=IFCPROJECT('0Yvh4$d$H4PgX8k1$f$x00',$,'Systems',$,$,$,$,(),#2);\n";
+    ifc << "#4=IFCWALL('0Yvh4$d$H4PgX8k1$f$x01',$,'Wall in system',$,$,$,$,'W-S',$);\n";
+    ifc << "#5=IFCCOLUMN('0Yvh4$d$H4PgX8k1$f$x02',$,'Column out',$,$,$,$,'C-S',$);\n";
+    ifc << "#6=IFCDISTRIBUTIONSYSTEM('0Yvh4$d$H4PgX8k1$f$x03',$,'Heating',$,$,$,.HEATING.);\n";
+    ifc << "#7=IFCSYSTEM('0Yvh4$d$H4PgX8k1$f$x05',$,'Structure',$,$);\n";
+    ifc << "#8=IFCRELASSIGNSTOGROUP('0Yvh4$d$H4PgX8k1$f$x04',$,$,$,(#4),$,#6);\n";
+    ifc << "#9=IFCRELASSIGNSTOGROUP('0Yvh4$d$H4PgX8k1$f$x06',$,$,$,(#4,#5),$,#7);\n";
+    ifc << "ENDSEC;\nEND-ISO-10303-21;\n";
+    fbv::ConvertOptions systems;
+    systems.output = (root / "systems").string();
+    systems.as_directory = true;
+    systems.source_name = "systems.ifc";
+    systems.mesher = "analytic";
+    const auto systems_status = fbv::convert_text(ifc.str(), systems);
+    if (systems_status.code != 0) std::cerr << systems_status.error << "\n";
+    CHECK(systems_status.code == 0);
+    CHECK(systems_status.elements == 2);
+    char systems_err[512] = {};
+    fbv_package* systems_pkg =
+        fbv_package_open(systems.output.c_str(), systems_err, sizeof(systems_err));
+    if (systems_pkg == nullptr) std::cerr << systems_err << "\n";
+    CHECK(systems_pkg != nullptr);
+    if (systems_pkg != nullptr) {
+      fbv_manifest_info systems_info{};
+      CHECK(fbv_package_manifest(systems_pkg, &systems_info) == FBV_OK);
+      CHECK(systems_info.format_version == 2);
+      fbv_package_close(systems_pkg);
+    }
+    fbv::SqliteDb db(std::filesystem::path(systems.output) / "meta.sqlite", false);
+    auto names = db.prepare(
+        "SELECT s.name, e.name FROM system_elements se "
+        "JOIN systems s ON s.id = se.system_id "
+        "JOIN elements e ON e.id = se.element_id "
+        "ORDER BY s.name, e.name");
+    CHECK(names.step_row());
+    CHECK(names.column_text(0) == "Heating");
+    CHECK(names.column_text(1) == "Wall in system");
+    CHECK(names.step_row());
+    CHECK(names.column_text(0) == "Structure");
+    CHECK(names.column_text(1) == "Column out");
+    CHECK(names.step_row());
+    CHECK(names.column_text(0) == "Structure");
+    CHECK(names.column_text(1) == "Wall in system");
+    CHECK(!names.step_row());
+    std::string systems_report;
+    CHECK(fbv::validate_package(systems.output, systems_report) == 0);
+
+    db.close();
+    fbv::SqliteDb writable(std::filesystem::path(systems.output) / "meta.sqlite", true);
+    writable.exec("DROP TABLE systems");
+    writable.close();
+    const auto sqlite_path = std::filesystem::path(systems.output) / "meta.sqlite";
+    const std::string broken_hash = fbv::sha256_file(sqlite_path);
+    std::string manifest_text =
+        fbv::read_text(std::filesystem::path(systems.output) / "manifest.json");
+    const auto hash_at = manifest_text.find("\"meta.sqlite\"");
+    CHECK(hash_at != std::string::npos);
+    const auto sha_key = manifest_text.find("\"sha256\"", hash_at);
+    CHECK(sha_key != std::string::npos);
+    const auto sha_quote = manifest_text.find('"', sha_key + 8);
+    CHECK(sha_quote != std::string::npos);
+    manifest_text.replace(sha_quote + 1, 64, broken_hash);
+    const auto bytes_key = manifest_text.find("\"bytes\"", sha_key);
+    CHECK(bytes_key != std::string::npos);
+    const auto bytes_colon = manifest_text.find(':', bytes_key);
+    const auto bytes_number = manifest_text.find_first_of("0123456789", bytes_colon);
+    const auto bytes_end = manifest_text.find_first_not_of("0123456789", bytes_number);
+    manifest_text.replace(bytes_number, bytes_end - bytes_number,
+                          std::to_string(std::filesystem::file_size(sqlite_path)));
+    fbv::write_text(std::filesystem::path(systems.output) / "manifest.json", manifest_text);
+    char broken_err[512] = {};
+    fbv_package* broken = fbv_package_open(systems.output.c_str(), broken_err, sizeof(broken_err));
+    CHECK(broken == nullptr);
+    CHECK(std::string(broken_err).find("missing table systems") != std::string::npos);
+    std::string broken_report;
+    CHECK(fbv::validate_package(systems.output, broken_report) != 0);
+    CHECK(broken_report.find("missing table systems") != std::string::npos);
   }
 
   if (g_failed != 0) {

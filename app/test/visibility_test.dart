@@ -8,6 +8,7 @@ ElementInfo element({
   required String ifcClass,
   String material = '',
   String name = '',
+  List<int> systemIds = const [],
 }) {
   return ElementInfo(
     id: id,
@@ -19,6 +20,7 @@ ElementInfo element({
     typeName: '',
     material: material,
     guid: '$id',
+    systemIds: systemIds,
   );
 }
 
@@ -140,6 +142,31 @@ void main() {
       ),
       {1, 2, 3, 4},
     );
+  });
+
+  test('a system filter keeps only members', () {
+    final heating = element(
+      id: 1,
+      storeyId: 4,
+      ifcClass: 'IfcWall',
+      systemIds: const [7, 8],
+    );
+    final other = element(id: 2, storeyId: 4, ifcClass: 'IfcColumn');
+    const filter = SceneFilter(systemId: 7);
+    expect(filter.active, isTrue);
+    expect(filter.matches(heating), isTrue);
+    expect(filter.matches(other), isFalse);
+    expect(
+      viewerHidden(
+        elements: [heating, other],
+        filter: filter,
+        hidden: const {},
+      ),
+      {2},
+    );
+    expect(isolateWithin({1, 2}, [heating, other], filter), {1});
+    expect(filter.copyWith(clearSystem: true).systemId, isNull);
+    expect(filter.copyWith(systemId: 8).matches(heating), isTrue);
   });
 
   test('isolate drops elements the filter rejects', () {
