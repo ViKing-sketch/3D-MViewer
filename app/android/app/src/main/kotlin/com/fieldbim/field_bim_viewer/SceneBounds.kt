@@ -59,6 +59,27 @@ object SceneBounds {
         return SceneFit(bounds, kept.size, list.size)
     }
 
+    /**
+     * Ids left out of a fit-all frame: stand-ins, manually hidden elements,
+     * and, while isolate is on, everything outside that set.
+     */
+    fun skipForFrame(
+        ids: Iterable<Long>,
+        standIns: Set<Long>,
+        hidden: Set<Long>,
+        isolated: Set<Long>,
+    ): Set<Long> {
+        val skip = HashSet<Long>()
+        skip.addAll(standIns)
+        skip.addAll(hidden)
+        if (isolated.isNotEmpty()) {
+            for (id in ids) {
+                if (id !in isolated) skip.add(id)
+            }
+        }
+        return skip
+    }
+
     private fun keepCore(geoms: List<ElementGeom>, axis: Int): List<ElementGeom> {
         val order = geoms.sortedBy { center(it, axis) }
         val n = order.size

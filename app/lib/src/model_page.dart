@@ -10,6 +10,7 @@ import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
 import 'strings.dart';
+import 'visibility.dart';
 
 class ModelPage extends StatefulWidget {
   const ModelPage({super.key, required this.path, required this.strings});
@@ -30,7 +31,7 @@ class _ModelPageState extends State<ModelPage>
   String? _error;
   int? _selectedId;
   String _query = '';
-  String? _classFilter;
+  SceneFilter _filter = const SceneFilter();
   final Set<int> _hidden = {};
   final Set<int> _isolated = {};
   bool _xray = false;
@@ -53,6 +54,7 @@ class _ModelPageState extends State<ModelPage>
   final _portraitKey = GlobalKey();
   final _sheet = DraggableScrollableController();
   double _fitBottomInset = 0;
+  int _fitToken = 0;
   int _insetTries = 0;
   late final TabController _tabs;
 
@@ -167,7 +169,7 @@ class _ModelPageState extends State<ModelPage>
   }
 
   bool _visible(ElementInfo element) {
-    if (_classFilter != null && element.ifcClass != _classFilter) return false;
+    if (!_filter.matches(element)) return false;
     if (_query.trim().isEmpty) return true;
     final query = _query.trim().toLowerCase();
     return element.name.toLowerCase().contains(query) ||
@@ -257,10 +259,39 @@ class _ModelPageState extends State<ModelPage>
     setState(() {
       _hidden.clear();
       _isolated.clear();
+      _filter = const SceneFilter();
       _xray = false;
       _section = const SectionView();
       _renderRevision++;
+      _fitToken++;
     });
+  }
+
+  void _applyFilter(SceneFilter next, {VoidCallback? refresh}) {
+    if (next == _filter) return;
+    setState(() {
+      _filter = next;
+      final kept = isolateWithin(_isolated, _elements, next);
+      _isolated
+        ..clear()
+        ..addAll(kept);
+      if (_selectedId != null && !_selectedMatches(next)) {
+        _selectedId = null;
+        _xray = false;
+      }
+      _renderRevision++;
+      _fitToken++;
+    });
+    refresh?.call();
+  }
+
+  bool _selectedMatches(SceneFilter filter) {
+    final id = _selectedId;
+    if (id == null) return true;
+    for (final element in _elements) {
+      if (element.id == id) return filter.matches(element);
+    }
+    return false;
   }
 
   void _isolateSelected() {
@@ -275,6 +306,7 @@ class _ModelPageState extends State<ModelPage>
           ..add(id);
       }
       _renderRevision++;
+      _fitToken++;
     });
   }
 
@@ -283,6 +315,39 @@ class _ModelPageState extends State<ModelPage>
       _xray = !_xray;
       _renderRevision++;
     });
+  }
+
+  Future<void> _openFilter() async {
+    final strings = widget.strings;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, refresh) {
+            return SafeArea(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Text(
+                        strings.filterTitle,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    _filterControls(strings, refresh: () => refresh(() {})),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _toggleSection() {
@@ -333,6 +398,13 @@ class _ModelPageState extends State<ModelPage>
                 onPressed: _selectedId == null ? null : _isolateSelected,
               ),
               _toolButton(
+                key: const ValueKey('filter-toggle'),
+                tooltip: strings.filter,
+                icon: Icons.filter_alt,
+                selected: _filter.active,
+                onPressed: () => unawaited(_openFilter()),
+              ),
+              _toolButton(
                 tooltip: strings.cameraHome,
                 icon: Icons.restart_alt,
                 onPressed: () => _viewport.currentState?.setCamera('iso'),
@@ -344,7 +416,10 @@ class _ModelPageState extends State<ModelPage>
                 onSelected: _onToolAction,
                 itemBuilder: (context) => [
                   PopupMenuItem(value: 'fit', child: Text(strings.fitAll)),
-                  PopupMenuItem(value: 'fit-selected', child: Text(strings.fitSelected)),
+                  PopupMenuItem(
+                    value: 'fit-selected',
+                    child: Text(strings.fitSelected),
+                  ),
                   PopupMenuItem(value: 'hide', child: Text(strings.hide)),
                   PopupMenuItem(value: 'show', child: Text(strings.showAll)),
                   PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
@@ -352,7 +427,10 @@ class _ModelPageState extends State<ModelPage>
                   PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
                   PopupMenuItem(value: 'right', child: Text(strings.viewRight)),
                   PopupMenuItem(value: 'top', child: Text(strings.viewTop)),
-                  PopupMenuItem(value: 'bottom', child: Text(strings.viewBottom)),
+                  PopupMenuItem(
+                    value: 'bottom',
+                    child: Text(strings.viewBottom),
+                  ),
                 ],
               ),
             ],
@@ -572,7 +650,7 @@ class _ModelPageState extends State<ModelPage>
     return Column(
       children: [
         _elementSearch(strings),
-        _classChips(strings),
+        _filterControls(strings),
         Expanded(
           child: Row(
             children: [
@@ -653,12 +731,31 @@ class _ModelPageState extends State<ModelPage>
 
   Widget _treeTab(BuildContext context) {
     final strings = widget.strings;
-    return Column(
-      children: [
-        _elementSearch(strings),
-        _classChips(strings),
-        Expanded(child: _tree(context)),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Three chip rows plus the search field leave no tree on a short
+        // landscape phone. The same controls open from the filter button.
+        final chips = constraints.maxHeight >= 640;
+        return Column(
+          children: [
+            _elementSearch(strings),
+            if (chips) _filterControls(strings) else _filterButton(strings),
+            Expanded(child: _tree(context)),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _filterButton(S strings) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        key: const ValueKey('filter-open'),
+        onPressed: () => unawaited(_openFilter()),
+        icon: const Icon(Icons.filter_alt),
+        label: Text(_filter.active ? strings.filterTitle : strings.filter),
+      ),
     );
   }
 
@@ -673,32 +770,110 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
-  Widget _classChips(S strings) {
+  Widget _filterControls(S strings, {VoidCallback? refresh}) {
+    final storeys = storeysOf(_spatial);
     final classes = {..._elements.map((e) => e.ifcClass)}.toList()..sort();
-    return SizedBox(
-      height: 56,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilterChip(
-              label: Text(strings.allClasses),
-              selected: _classFilter == null,
-              onSelected: (_) => setState(() => _classFilter = null),
+    final materials = materialsOf(_elements);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (storeys.isNotEmpty)
+          _chipStrip([
+            _filterChip(
+              key: const ValueKey('storey-all'),
+              label: strings.allStoreys,
+              selected: _filter.storeyId == null,
+              onSelected: () => _applyFilter(
+                _filter.copyWith(clearStorey: true),
+                refresh: refresh,
+              ),
+            ),
+            for (final storey in storeys)
+              _filterChip(
+                key: ValueKey('storey-${storey.id}'),
+                label: storey.name.isEmpty ? storey.kind : storey.name,
+                selected: _filter.storeyId == storey.id,
+                onSelected: () => _applyFilter(
+                  _filter.copyWith(storeyId: storey.id),
+                  refresh: refresh,
+                ),
+              ),
+          ]),
+        _chipStrip([
+          _filterChip(
+            key: const ValueKey('class-all'),
+            label: strings.allClasses,
+            selected: _filter.ifcClass == null,
+            onSelected: () => _applyFilter(
+              _filter.copyWith(clearClass: true),
+              refresh: refresh,
             ),
           ),
           for (final name in classes)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilterChip(
-                label: Text(name),
-                selected: _classFilter == name,
-                onSelected: (_) => setState(() => _classFilter = name),
+            _filterChip(
+              key: ValueKey('class-$name'),
+              label: name,
+              selected: _filter.ifcClass == name,
+              onSelected: () => _applyFilter(
+                _filter.copyWith(ifcClass: name),
+                refresh: refresh,
               ),
             ),
-        ],
+        ]),
+        if (materials.isNotEmpty)
+          _chipStrip([
+            _filterChip(
+              key: const ValueKey('material-all'),
+              label: strings.allMaterials,
+              selected: _filter.material == null,
+              onSelected: () => _applyFilter(
+                _filter.copyWith(clearMaterial: true),
+                refresh: refresh,
+              ),
+            ),
+            for (final name in materials)
+              _filterChip(
+                key: ValueKey(
+                  name.isEmpty ? 'material-empty' : 'material-$name',
+                ),
+                label: name.isEmpty ? strings.noMaterial : name,
+                selected: _filter.material == name,
+                onSelected: () => _applyFilter(
+                  _filter.copyWith(material: name),
+                  refresh: refresh,
+                ),
+              ),
+          ]),
+      ],
+    );
+  }
+
+  Widget _chipStrip(List<Widget> chips) {
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        children: chips,
+      ),
+    );
+  }
+
+  Widget _filterChip({
+    required Key key,
+    required String label,
+    required bool selected,
+    required VoidCallback onSelected,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        key: key,
+        label: Text(label),
+        selected: selected,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onSelected: (_) => onSelected(),
       ),
     );
   }
@@ -707,9 +882,11 @@ class _ModelPageState extends State<ModelPage>
     if (!_section.enabled) return viewport;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final portrait = constraints.maxHeight > constraints.maxWidth &&
+        final portrait =
+            constraints.maxHeight > constraints.maxWidth &&
             constraints.maxWidth < 1100;
-        final sideRail = !portrait &&
+        final sideRail =
+            !portrait &&
             constraints.maxWidth > constraints.maxHeight &&
             constraints.maxHeight < 560;
         final lift = portrait ? _fitBottomInset * constraints.maxHeight : 0.0;
@@ -822,7 +999,9 @@ class _ModelPageState extends State<ModelPage>
     final origin = button.localToGlobal(Offset.zero);
     final screen = MediaQuery.sizeOf(context);
     final width = math.min(320.0, screen.width - 16);
-    final left = origin.dx.clamp(8.0, math.max(8.0, screen.width - width - 8)).toDouble();
+    final left = origin.dx
+        .clamp(8.0, math.max(8.0, screen.width - width - 8))
+        .toDouble();
     final bottom = math.max(8.0, screen.height - origin.dy + 8);
     await showGeneralDialog<void>(
       context: context,
@@ -885,7 +1064,10 @@ class _ModelPageState extends State<ModelPage>
                   value: _section.box,
                   onChanged: (value) {
                     _setSection(
-                      _section.copyWith(box: value, inset: value ? _section.inset : 0),
+                      _section.copyWith(
+                        box: value,
+                        inset: value ? _section.inset : 0,
+                      ),
                     );
                     setLocal(() {});
                   },
@@ -935,9 +1117,13 @@ class _ModelPageState extends State<ModelPage>
           data: SliderTheme.of(context).copyWith(
             trackHeight: 8,
             activeTrackColor: Theme.of(context).colorScheme.primary,
-            inactiveTrackColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.28),
+            inactiveTrackColor: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.28),
             thumbColor: Theme.of(context).colorScheme.primary,
-            overlayColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+            overlayColor: Theme.of(
+              context,
+            ).colorScheme.primary.withValues(alpha: 0.16),
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
           ),
           child: Slider(
@@ -960,12 +1146,17 @@ class _ModelPageState extends State<ModelPage>
       elementCount: _elements.length,
       selectedName: selected?.name,
       selectedId: _selectedId,
-      hiddenIds: _hidden,
+      hiddenIds: viewerHidden(
+        elements: _elements,
+        filter: _filter,
+        hidden: _hidden,
+      ),
       isolatedIds: _isolated,
       xray: _xray,
       section: _section,
       renderRevision: _renderRevision,
       frameToken: _frameToken,
+      fitToken: _fitToken,
       bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
