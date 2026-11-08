@@ -8,6 +8,7 @@ import 'appearance.dart';
 import 'model.dart';
 import 'model_page.dart';
 import 'package_import.dart';
+import 'package_plan.dart';
 import 'package_session.dart';
 import 'strings.dart';
 
@@ -202,12 +203,17 @@ class LibraryPageState extends State<LibraryPage> {
                     itemBuilder: (context, index) {
                       final package = _packages[index];
                       final kb = (package.bytes / 1024).toStringAsFixed(0);
+                      final date = libraryDateLabel(package.createdUtc);
+                      final detail = date.isEmpty
+                          ? '${package.schema} · ${package.elementCount} · $kb KB'
+                          : '${package.schema} · ${package.elementCount} · $kb KB · $date';
                       return ListTile(
-                        minTileHeight: 64,
+                        minTileHeight: 72,
+                        leading: package.plan.isEmpty
+                            ? const Icon(Icons.view_in_ar_outlined)
+                            : PackagePlan(boxes: package.plan),
                         title: Text(package.name),
-                        subtitle: Text(
-                          '${package.schema} · ${package.elementCount} · $kb KB',
-                        ),
+                        subtitle: Text(detail),
                         onTap: () => _open(package.path),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline),
