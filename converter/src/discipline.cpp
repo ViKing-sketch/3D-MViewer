@@ -156,6 +156,8 @@ std::string discipline_from_text(const std::string& text) {
 
 }  // namespace
 
+// One tile is one storey bucket times one discipline. The keyword and class
+// tables are the contract in docs/package_format.md.
 std::string assign_discipline(const std::string& ifc_class,
                               const std::vector<std::string>& system_texts) {
   for (const std::string& text : system_texts) {
