@@ -135,7 +135,7 @@ int main() {
   if (package != nullptr) {
     fbv_manifest_info info{};
     CHECK(fbv_package_manifest(package, &info) == FBV_OK);
-    CHECK(info.format_version == 3);
+    CHECK(info.format_version == 4);
     CHECK(std::string(info.name) == "Sample Project");
     CHECK(std::string(info.source_schema) == "IFC4");
     CHECK(std::string(info.length_unit) == "millimetre");
@@ -283,6 +283,9 @@ int main() {
         "JOIN elements e ON e.id = te.element_id WHERE e.ifc_class = 'IfcBuildingElementProxy'");
     CHECK(proxy_tile.step_row());
     CHECK(std::string(proxy_tile.column_text(0)).empty());
+    auto exact = db.prepare("SELECT COUNT(*) FROM exact_geometry");
+    CHECK(exact.step_row());
+    CHECK(exact.column_int64(0) == 0);
     fbv_package_close(package);
   }
 
@@ -669,7 +672,7 @@ END-ISO-10303-21;
     if (systems_pkg != nullptr) {
       fbv_manifest_info systems_info{};
       CHECK(fbv_package_manifest(systems_pkg, &systems_info) == FBV_OK);
-      CHECK(systems_info.format_version == 3);
+      CHECK(systems_info.format_version == 4);
       fbv_package_close(systems_pkg);
     }
     fbv::SqliteDb db(std::filesystem::path(systems.output) / "meta.sqlite", false);

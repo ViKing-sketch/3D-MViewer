@@ -89,6 +89,20 @@ class SystemInfo {
   final String guid;
 }
 
+/// One optional BinTools file. Absence from this list means the element has
+/// no exact geometry. This is not a row of `brep.pack`.
+class ExactGeometry {
+  const ExactGeometry({
+    required this.elementId,
+    required this.path,
+    required this.bytes,
+  });
+
+  final int elementId;
+  final String path;
+  final int bytes;
+}
+
 class TileInfo {
   TileInfo({
     required this.id,

@@ -587,6 +587,29 @@ fbv_package* fbv_package_open_impl(const char* path, std::string& error) {
         return nullptr;
       }
     }
+    if (format_version >= 4) {
+      auto exact = package->db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exact_geometry'");
+      if (!exact.step_row()) {
+        error =
+            "format_version " + std::to_string(format_version) + " is missing table exact_geometry";
+        return nullptr;
+      }
+      auto rows = package->db.prepare("SELECT path, bytes FROM exact_geometry");
+      while (rows.step_row()) {
+        const std::string rel = rows.column_text(0);
+        if (rel.empty() || rel.find("..") != std::string::npos) {
+          error = "exact_geometry path is not inside the package";
+          return nullptr;
+        }
+        const auto file = package->root / std::filesystem::path(rel);
+        if (!std::filesystem::is_regular_file(file) ||
+            static_cast<std::int64_t>(std::filesystem::file_size(file)) != rows.column_int64(1)) {
+          error = "missing exact geometry " + rel;
+          return nullptr;
+        }
+      }
+    }
   } catch (const std::exception& ex) {
     error = ex.what();
     return nullptr;
