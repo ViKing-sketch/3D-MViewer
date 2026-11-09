@@ -13,8 +13,9 @@ void main() {
       final dest = Directory(p.join(root.path, 'dest'))..createSync();
       final pkg = File(p.join(source.path, 'wall.fbvpkg'))
         ..writeAsBytesSync([1, 2, 3, 4]);
-      final remark = File(p.join(source.path, 'wall.fbvpkg.remarks.json'))
-        ..writeAsStringSync('{"remarks":[]}');
+      File(
+        p.join(source.path, 'wall.fbvpkg.remarks.json'),
+      ).writeAsStringSync('{"remarks":[]}');
       File(p.join(source.path, 'notes.txt')).writeAsStringSync('not a package');
       final secret = File(p.join(root.path, 'secret.bin'))
         ..writeAsBytesSync([9, 9]);
