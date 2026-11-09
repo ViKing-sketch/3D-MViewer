@@ -14,6 +14,8 @@ class RemarksSection extends StatefulWidget {
     required this.element,
     required this.guidToElement,
     required this.onChanged,
+    this.captureViewpoint,
+    this.onOpen,
   });
 
   final S strings;
@@ -21,6 +23,12 @@ class RemarksSection extends StatefulWidget {
   final ElementInfo element;
   final Map<String, int> guidToElement;
   final VoidCallback onChanged;
+
+  /// Current camera and filters. Null in a test that only writes text.
+  final Future<RemarkViewpoint?> Function()? captureViewpoint;
+
+  /// Applies a saved viewpoint. Null when the host has nowhere to put it.
+  final void Function(Remark remark)? onOpen;
 
   @override
   State<RemarksSection> createState() => _RemarksSectionState();
@@ -38,13 +46,15 @@ class _RemarksSectionState extends State<RemarksSection> {
     super.dispose();
   }
 
-  void _add() {
+  Future<void> _add() async {
     try {
+      final viewpoint = await widget.captureViewpoint?.call();
       widget.store.add(
         elementId: widget.element.id,
         guid: widget.element.guid,
         text: _text.text,
         photoSource: _photo.text,
+        viewpoint: viewpoint,
       );
       _text.clear();
       _photo.clear();
@@ -104,6 +114,11 @@ class _RemarksSectionState extends State<RemarksSection> {
                   '${widget.store.folderPath}/${remark.photoName}',
                 ).existsSync())
               Text(strings.remarkHasPhoto),
+            if (remark.viewpoint != null)
+              TextButton(
+                onPressed: () => widget.onOpen?.call(remark),
+                child: Text(strings.showViewpoint),
+              ),
             const SizedBox(height: 8),
           ],
           TextField(

@@ -173,6 +173,7 @@ class S {
   String get remarkPhoto =>
       russian ? 'Путь к фото, если есть' : 'Path to a photo, if any';
   String get addRemark => russian ? 'Добавить замечание' : 'Add remark';
+  String get showViewpoint => russian ? 'Показать ракурс' : 'Show view';
   String get exportBcf => russian ? 'Экспорт BCF' : 'Export BCF';
   String get importBcf => russian ? 'Импорт BCF' : 'Import BCF';
   String get bcfFile => russian ? 'Файл BCF' : 'BCF file';
