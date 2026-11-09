@@ -80,6 +80,54 @@ class FilamentCommands {
   Future<void> setSection(SectionView section) {
     return channel.invokeMethod<void>('setSection', section.toJson());
   }
+
+  /// Live orbit or walk eye, in Filament Y-up metres. Null when this target
+  /// has no platform view.
+  Future<FilamentCamera?> cameraPose() async {
+    try {
+      final value = await channel.invokeMethod<dynamic>('cameraPose');
+      if (value is! Map) return null;
+      final eye = _triple(value['eye']);
+      final target = _triple(value['target']);
+      if (eye == null || target == null) return null;
+      final dx = target[0] - eye[0];
+      final dy = target[1] - eye[1];
+      final dz = target[2] - eye[2];
+      if (dx * dx + dy * dy + dz * dz < 1e-8) return null;
+      return FilamentCamera(eye: eye, target: target);
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Places the orbit camera. [eye] and [target] are Filament Y-up.
+  Future<void> setViewpoint({
+    required List<double> eye,
+    required List<double> target,
+  }) {
+    return channel.invokeMethod<void>('setViewpoint', {
+      'eye': eye,
+      'target': target,
+    });
+  }
+}
+
+class FilamentCamera {
+  const FilamentCamera({required this.eye, required this.target});
+
+  final List<double> eye;
+  final List<double> target;
+}
+
+List<double>? _triple(Object? raw) {
+  if (raw is! List || raw.length < 3) return null;
+  final x = (raw[0] as num?)?.toDouble();
+  final y = (raw[1] as num?)?.toDouble();
+  final z = (raw[2] as num?)?.toDouble();
+  if (x == null || y == null || z == null) return null;
+  return [x, y, z];
 }
 
 /// Срез controls. [axis] is `x`, `y`, `z` or `view`.

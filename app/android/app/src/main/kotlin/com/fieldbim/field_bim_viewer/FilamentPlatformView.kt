@@ -384,6 +384,31 @@ class FilamentPlatformView(
                 }
                 result.success(null)
             }
+            "cameraPose" -> {
+                renderHandler.post {
+                    if (destroyed) {
+                        result.success(null)
+                        return@post
+                    }
+                    val eye = lastEye.copyOf()
+                    val target = lastTarget.copyOf()
+                    result.success(
+                        mapOf(
+                            "eye" to eye.toList(),
+                            "target" to target.toList(),
+                        ),
+                    )
+                }
+            }
+            "setViewpoint" -> {
+                val eye = vec3(call.argument<List<*>>("eye"))
+                val target = vec3(call.argument<List<*>>("target"))
+                renderHandler.post {
+                    if (destroyed || eye == null || target == null) return@post
+                    placeOrbit(eye, target)
+                }
+                result.success(null)
+            }
             "setNavigation" -> {
                 val mode = call.argument<String>("mode") ?: "orbit"
                 val token = call.argument<Number>("token")?.toInt() ?: 0
@@ -1549,6 +1574,43 @@ class FilamentPlatformView(
             .farPlane(far.toFloat())
             .build(Manipulator.Mode.ORBIT)
         gesture = OrbitGestures(surfaceView, manipulator!!, ::noteZoom)
+    }
+
+    private fun placeOrbit(eye: FloatArray, target: FloatArray) {
+        val dx = (eye[0] - target[0]).toDouble()
+        val dy = (eye[1] - target[1]).toDouble()
+        val dz = (eye[2] - target[2]).toDouble()
+        val distance = sqrt(dx * dx + dy * dy + dz * dz).coerceAtLeast(0.25)
+        lastEye = doubleArrayOf(eye[0].toDouble(), eye[1].toDouble(), eye[2].toDouble())
+        lastTarget = doubleArrayOf(target[0].toDouble(), target[1].toDouble(), target[2].toDouble())
+        walkMode = false
+        walkGesture = null
+        baseNear = max(0.02, distance / 4000.0)
+        near = baseNear
+        far = max(distance * 80.0, 500.0)
+        dollySpeed = max(distance * 0.035, 0.25).toFloat()
+        dollyPending = 0f
+        val zoom = dollySpeed
+        manipulator = Manipulator.Builder()
+            .viewport(viewportW.coerceAtLeast(1), viewportH.coerceAtLeast(1))
+            .targetPosition(target[0], target[1], target[2])
+            .orbitHomePosition(eye[0], eye[1], eye[2])
+            .upVector(0f, 1f, 0f)
+            .zoomSpeed(zoom)
+            .fovDegrees(CameraFit.fovDegrees.toFloat())
+            .fovDirection(Manipulator.Fov.VERTICAL)
+            .farPlane(far.toFloat())
+            .build(Manipulator.Mode.ORBIT)
+        gesture = OrbitGestures(surfaceView, manipulator!!, ::noteZoom)
+        framed = true
+        updateProjection()
+        if (::camera.isInitialized) {
+            camera.lookAt(
+                lastEye[0], lastEye[1], lastEye[2],
+                lastTarget[0], lastTarget[1], lastTarget[2],
+                0.0, 1.0, 0.0,
+            )
+        }
     }
 
     private fun vec3(raw: List<*>?): FloatArray? {

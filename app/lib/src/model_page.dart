@@ -449,6 +449,66 @@ class _ModelPageState extends State<ModelPage>
     setState(() => _walking = false);
   }
 
+  Future<RemarkViewpoint> _captureViewpoint(ElementInfo element) async {
+    final camera = await _viewport.currentState?.commands?.cameraPose();
+    final origin = localOriginOf(_session?.manifest ?? const {});
+    if (camera != null) {
+      return viewpointFromFilament(
+        eye: camera.eye,
+        target: camera.target,
+        storeyId: _filter.storeyId,
+        ifcClass: _filter.ifcClass,
+        material: _filter.material,
+        systemId: _filter.systemId,
+        section: _section,
+        hidden: _hidden.toList(),
+        isolated: _isolated.toList(),
+      );
+    }
+    ElementBox? box;
+    for (final item in _boxes) {
+      if (item.id == element.id && !item.degenerate) box = item;
+    }
+    return fallbackViewpoint(
+      walk: _walking ? _walkPose : null,
+      box: box,
+      origin: origin,
+      storeyId: _filter.storeyId,
+      ifcClass: _filter.ifcClass,
+      material: _filter.material,
+      systemId: _filter.systemId,
+      section: _section,
+      hidden: _hidden.toList(),
+      isolated: _isolated.toList(),
+    );
+  }
+
+  void _openRemark(Remark remark) {
+    final view = remark.viewpoint;
+    if (view == null) return;
+    setState(() {
+      _filter = SceneFilter(
+        storeyId: view.storeyId,
+        ifcClass: view.ifcClass,
+        material: view.material,
+        systemId: view.systemId,
+      );
+      _section = view.section;
+      _hidden
+        ..clear()
+        ..addAll(view.hidden);
+      _isolated
+        ..clear()
+        ..addAll(view.isolated);
+      _renderRevision++;
+    });
+    final pose = view.filament;
+    _viewport.currentState?.commands?.setViewpoint(
+      eye: pose.eye,
+      target: pose.target,
+    );
+  }
+
   void _toggleWalk() {
     setState(() {
       if (_walking) {
@@ -1570,6 +1630,8 @@ class _ModelPageState extends State<ModelPage>
                     if (item.guid.isNotEmpty) item.guid: item.id,
                 },
                 onChanged: () => setState(() {}),
+                captureViewpoint: () => _captureViewpoint(element),
+                onOpen: _openRemark,
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),

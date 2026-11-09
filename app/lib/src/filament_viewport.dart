@@ -68,6 +68,7 @@ class FilamentViewport extends StatefulWidget {
 }
 
 class FilamentViewportState extends State<FilamentViewport> {
+  FilamentCommands? get commands => _commands;
   FilamentCommands? _commands;
   String? _status;
   String? _statusCode;

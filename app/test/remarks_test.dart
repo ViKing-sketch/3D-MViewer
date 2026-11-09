@@ -74,6 +74,70 @@ void main() {
     },
   );
 
+  test('BCF viewpoint carries the camera in IFC coordinates', () {
+    final root = Directory.systemTemp.createTempSync('fbv-remark-cam-');
+    final clock = DateTime.utc(2026, 11, 9, 12);
+    final store = RemarkStore(
+      p.join(root.path, 'model'),
+      now: () => clock,
+      ids: RemarkIds(),
+    );
+    const saved = RemarkViewpoint(
+      eyeX: 1,
+      eyeY: 2,
+      eyeZ: 3,
+      dirX: 0,
+      dirY: 1,
+      dirZ: 0,
+      storeyId: 4,
+      ifcClass: 'IfcWall',
+    );
+    store.add(
+      elementId: 7,
+      guid: 'WALLGUID0000000000001',
+      text: 'ракурс',
+      viewpoint: saved,
+    );
+    final bcf = p.join(root.path, 'cam.bcf');
+    store.exportBcf(bcf, origin: const [10, 0, 0]);
+    final imported = RemarkStore(
+      p.join(root.path, 'other'),
+      now: () => clock,
+      ids: RemarkIds(),
+    );
+    expect(
+      imported.importBcf(
+        bcf,
+        {'WALLGUID0000000000001': 7},
+        origin: const [10, 0, 0],
+      ),
+      0,
+    );
+    final camera = imported.remarks.single.viewpoint!;
+    expect(camera.eyeX, closeTo(1, 1e-5));
+    expect(camera.eyeY, closeTo(2, 1e-5));
+    expect(camera.eyeZ, closeTo(3, 1e-5));
+    expect(camera.dirY, closeTo(1, 1e-5));
+    expect(camera.storeyId, isNull);
+
+    final reloaded = RemarkStore(store.packagePath, ids: RemarkIds())..load();
+    expect(reloaded.remarks.single.viewpoint!.storeyId, 4);
+    expect(reloaded.remarks.single.viewpoint!.ifcClass, 'IfcWall');
+
+    final fromViewer = viewpointFromFilament(
+      eye: const [1, 3, -2],
+      target: const [1, 3, -3],
+    );
+    expect(fromViewer.eyeX, closeTo(1, 1e-6));
+    expect(fromViewer.eyeY, closeTo(2, 1e-6));
+    expect(fromViewer.eyeZ, closeTo(3, 1e-6));
+    expect(fromViewer.dirY, closeTo(1, 1e-6));
+    final restored = fromViewer.filament;
+    expect(restored.eye[0], closeTo(1, 1e-6));
+    expect(restored.eye[1], closeTo(3, 1e-6));
+    expect(restored.eye[2], closeTo(-2, 1e-6));
+  });
+
   test('a topic with an unknown GlobalId is kept and counted', () {
     final root = Directory.systemTemp.createTempSync('fbv-remark-miss-');
     final store = RemarkStore(p.join(root.path, 'model'), ids: RemarkIds());
