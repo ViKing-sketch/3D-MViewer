@@ -39,6 +39,7 @@ dependencies:
   # 0.6.0+eol is an empty stub. 0.5.x bundles libsqlite3.so, which Dart FFI
   # otherwise cannot dlopen on Android (including API 36).
   sqlite3_flutter_libs: ^0.5.40
+  archive: ^4.6.0
 
 dev_dependencies:
   flutter_test:
