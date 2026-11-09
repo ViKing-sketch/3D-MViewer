@@ -174,6 +174,17 @@ class S {
       russian ? 'Путь к фото, если есть' : 'Path to a photo, if any';
   String get addRemark => russian ? 'Добавить замечание' : 'Add remark';
   String get showViewpoint => russian ? 'Показать ракурс' : 'Show view';
+  String get syncUrl => russian
+      ? 'Адрес сервера организации или соседа в сети'
+      : 'Organisation server or LAN peer';
+  String get syncPull => russian ? 'Забрать' : 'Pull';
+  String get syncListen => russian ? 'Слушать' : 'Listen';
+  String syncDone(int copied, int kept) => russian
+      ? 'Синхронизация: скопировано $copied, оставлено $kept'
+      : 'Sync: copied $copied, kept $kept';
+  String syncListening(String url) => russian
+      ? 'Слушаю $url. Для другого компьютера подставьте адрес этой машины.'
+      : 'Listening at $url. Another computer uses this machine\'s address.';
   String get exportBcf => russian ? 'Экспорт BCF' : 'Export BCF';
   String get importBcf => russian ? 'Импорт BCF' : 'Import BCF';
   String get bcfFile => russian ? 'Файл BCF' : 'BCF file';

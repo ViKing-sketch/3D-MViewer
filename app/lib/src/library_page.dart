@@ -12,6 +12,7 @@ import 'package_import.dart';
 import 'package_plan.dart';
 import 'package_session.dart';
 import 'strings.dart';
+import 'sync.dart';
 
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key, required this.strings, this.initialDirectory});
@@ -25,9 +26,12 @@ class LibraryPage extends StatefulWidget {
 
 class LibraryPageState extends State<LibraryPage> {
   late final TextEditingController _path;
+  final _serverUrl = TextEditingController();
   List<PackageSummary> _packages = const [];
   String? _error;
   String _draft = '';
+  SyncServer? _listener;
+  String? _listenUrl;
 
   @override
   void initState() {
@@ -53,15 +57,61 @@ class LibraryPageState extends State<LibraryPage> {
   @override
   void dispose() {
     _path.dispose();
+    _serverUrl.dispose();
+    _listener?.close();
     super.dispose();
   }
 
   void scan() {
     final folder = _draft.trim().isEmpty ? _path.text.trim() : _draft.trim();
+    final saved = folder.isEmpty ? '' : SyncSettings.load(folder).serverUrl;
     setState(() {
       _error = null;
       _packages = scanLibrary(folder);
+      if (_serverUrl.text.isEmpty && saved.isNotEmpty) _serverUrl.text = saved;
     });
+  }
+
+  String get _folder =>
+      _draft.trim().isEmpty ? _path.text.trim() : _draft.trim();
+
+  Future<void> _pullSync() async {
+    final folder = _folder;
+    final url = _serverUrl.text.trim();
+    if (folder.isEmpty || url.isEmpty) return;
+    SyncSettings(serverUrl: url).save(folder);
+    try {
+      final result = await pullLibrary(folder, Uri.parse(url));
+      if (!mounted) return;
+      setState(() {
+        _packages = scanLibrary(folder);
+        _error = widget.strings.syncDone(result.copied, result.kept);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _listenSync() async {
+    final folder = _folder;
+    if (folder.isEmpty) return;
+    await _listener?.close();
+    try {
+      final server = await SyncServer.start(folder);
+      if (!mounted) {
+        await server.close();
+        return;
+      }
+      setState(() {
+        _listener = server;
+        _listenUrl = server.base.toString();
+        _error = widget.strings.syncListening(server.base.toString());
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
   }
 
   Future<void> _import() async {
@@ -209,6 +259,37 @@ class LibraryPageState extends State<LibraryPage> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('sync-url'),
+                    controller: _serverUrl,
+                    decoration: InputDecoration(
+                      hintText: strings.syncUrl,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(onPressed: _pullSync, child: Text(strings.syncPull)),
+                TextButton(
+                  onPressed: _listenSync,
+                  child: Text(strings.syncListen),
+                ),
+              ],
+            ),
+          ),
+          if (_listenUrl != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_listenUrl!),
+              ),
+            ),
           if (_error != null)
             Padding(padding: const EdgeInsets.all(12), child: Text(_error!)),
           Expanded(
