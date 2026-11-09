@@ -57,7 +57,8 @@ if [[ ! -d "$SRC/src" ]]; then
   tar -xzf "$TARBALL" -C "$CACHE"
 fi
 
-BUILD="/tmp/fbv-android-occt/${ABI}"
+# Platform is part of the path so an API 28 build is not reused for API 27.
+BUILD="/tmp/fbv-android-occt/${PLATFORM}/${ABI}"
 INSTALL="$BUILD/occt-install"
 PROBE_BUILD="$BUILD/probe"
 mkdir -p "$BUILD"
