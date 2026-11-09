@@ -165,6 +165,24 @@ class S {
   String get converterExists => russian
       ? 'Каталог результата уже есть. Он не перезаписывается.'
       : 'The output folder already exists. It is not overwritten.';
+  String get remarks => russian ? 'Замечания' : 'Remarks';
+  String get remarksLocal => russian
+      ? 'Хранятся рядом с пакетом, не внутри него. Сеть и сервер здесь не используются. Файл BCF можно унести отдельно.'
+      : 'Stored beside the package, not inside it. No network and no server. The BCF file can be carried separately.';
+  String get remarkHint => russian ? 'Текст замечания' : 'Remark text';
+  String get remarkPhoto =>
+      russian ? 'Путь к фото, если есть' : 'Path to a photo, if any';
+  String get addRemark => russian ? 'Добавить замечание' : 'Add remark';
+  String get exportBcf => russian ? 'Экспорт BCF' : 'Export BCF';
+  String get importBcf => russian ? 'Импорт BCF' : 'Import BCF';
+  String get bcfFile => russian ? 'Файл BCF' : 'BCF file';
+  String get remarkHasPhoto => russian ? 'Есть фото' : 'Has a photo';
+  String get noRemarks =>
+      russian ? 'К этому элементу замечаний нет' : 'No remarks on this element';
+  String unmatchedRemarks(int count) => russian
+      ? 'Без элемента в этом пакете: $count'
+      : 'Not matched to an element in this package: $count';
+
   String get kindIfc => 'IFC';
   String get kindPackage => russian ? 'Пакет' : 'Package';
 

@@ -11,6 +11,8 @@ import 'package_import.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
 import 'package_session.dart';
+import 'remarks.dart';
+import 'remarks_section.dart';
 import 'strings.dart';
 import 'visibility.dart';
 import 'walk_pose.dart';
@@ -28,6 +30,7 @@ class ModelPage extends StatefulWidget {
 class _ModelPageState extends State<ModelPage>
     with SingleTickerProviderStateMixin {
   PackageSession? _session;
+  RemarkStore? _remarks;
   List<SpatialNode> _spatial = const [];
   List<SystemInfo> _systems = const [];
   List<ElementInfo> _elements = const [];
@@ -91,6 +94,7 @@ class _ModelPageState extends State<ModelPage>
       _elements = session.elements();
       _boxes = session.elementBoxes();
       _specs = session.specifications();
+      _remarks = RemarkStore(widget.path)..load();
     } catch (error) {
       _error = error.toString();
     }
@@ -129,6 +133,7 @@ class _ModelPageState extends State<ModelPage>
         _elements = session.elements();
         _boxes = session.elementBoxes();
         _specs = session.specifications();
+        _remarks = RemarkStore(widget.path)..load();
         _opening = false;
       });
     } catch (error) {
@@ -1554,6 +1559,19 @@ class _ModelPageState extends State<ModelPage>
             ..._group(strings.quantities, quantityRows),
           if (classRows.isNotEmpty)
             ..._group(strings.classification, classRows),
+          if (_remarks != null)
+            SliverToBoxAdapter(
+              child: RemarksSection(
+                strings: strings,
+                store: _remarks!,
+                element: element,
+                guidToElement: {
+                  for (final item in _elements)
+                    if (item.guid.isNotEmpty) item.guid: item.id,
+                },
+                onChanged: () => setState(() {}),
+              ),
+            ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
