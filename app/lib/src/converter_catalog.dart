@@ -77,6 +77,26 @@ String outputDirectoryFor(String ifcPath) {
   );
 }
 
+/// `FBV_PROGRESS <done> <total>` from fbvconv. [total] is a stage count,
+/// not a count of elements.
+class StageProgress {
+  const StageProgress(this.done, this.total);
+
+  final int done;
+  final int total;
+
+  double get fraction => done / total;
+}
+
+StageProgress? parseStageProgress(String line) {
+  final match = RegExp(r'^FBV_PROGRESS (\d+) (\d+)$').firstMatch(line.trim());
+  if (match == null) return null;
+  final done = int.parse(match.group(1)!);
+  final total = int.parse(match.group(2)!);
+  if (total <= 0 || done < 0 || done > total) return null;
+  return StageProgress(done, total);
+}
+
 /// Arguments for one conversion. Analytic mesher, directory package.
 List<String> converterArguments(String input, String output) {
   return [input, '-o', output, '--directory', '--mesher', 'analytic'];

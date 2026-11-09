@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <iostream>
 #include <sstream>
 
 #if defined(_WIN32)
@@ -64,6 +65,13 @@ std::uint64_t path_bytes(const std::filesystem::path& path) {
     if (entry.is_regular_file()) total += static_cast<std::uint64_t>(entry.file_size());
   }
   return total;
+}
+
+// Two stages the converter can name: the scene is built, then the package is
+// written. This is not a count of elements.
+void report_progress(int done, int total) {
+  std::cerr << "FBV_PROGRESS " << done << ' ' << total << '\n';
+  std::cerr.flush();
 }
 
 double seconds_between(std::chrono::steady_clock::time_point a,
@@ -247,6 +255,7 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
     }
     scene = build_scene(file, options, ifc_text);
     have_scene = true;
+    report_progress(1, 2);
     const auto parsed = std::chrono::steady_clock::now();
     status.parse_seconds = seconds_between(parse_started, parsed) - scene.geometry_seconds;
     if (status.parse_seconds < 0) status.parse_seconds = 0;
@@ -285,6 +294,7 @@ ConvertStatus convert_text(const std::string& ifc_text, const ConvertOptions& op
     const std::string source_name = options.source_name.empty() ? "input.ifc" : options.source_name;
     const auto write_started = std::chrono::steady_clock::now();
     write_scene_package(scene, options, ifc_text, source_name);
+    report_progress(2, 2);
     const auto write_done = std::chrono::steady_clock::now();
     status.write_seconds = seconds_between(write_started, write_done);
     status.package_bytes = path_bytes(options.output);
