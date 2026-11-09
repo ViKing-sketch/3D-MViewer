@@ -571,7 +571,19 @@ fbv_package* fbv_package_open_impl(const char* path, std::string& error) {
       auto members = package->db.prepare(
           "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'system_elements'");
       if (!systems.step_row() || !members.step_row()) {
-        error = "format_version 2 is missing table systems or system_elements";
+        error = "format_version " + std::to_string(format_version) +
+                " is missing table systems or system_elements";
+        return nullptr;
+      }
+    }
+    if (format_version >= 3) {
+      auto tiles = package->db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tiles'");
+      auto tile_elements = package->db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tile_elements'");
+      if (!tiles.step_row() || !tile_elements.step_row()) {
+        error = "format_version " + std::to_string(format_version) +
+                " is missing table tiles or tile_elements";
         return nullptr;
       }
     }

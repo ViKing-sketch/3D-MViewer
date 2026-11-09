@@ -1,3 +1,4 @@
+#include "discipline.hpp"
 #include "fbv/convert.hpp"
 #include "fbv/glb.hpp"
 #include "fbv/io.hpp"
@@ -83,6 +84,12 @@ int run_cli(const std::string& command) {
 }  // namespace
 
 int main() {
+  CHECK(fbv::assign_discipline("IfcWall", {}) == "architecture");
+  CHECK(fbv::assign_discipline("IfcDuctSegment", {}) == "ventilation");
+  CHECK(fbv::assign_discipline("IfcBuildingElementProxy", {}) == "");
+  CHECK(fbv::assign_discipline("IfcWall", {"Heating water"}) == "heating");
+  CHECK(fbv::assign_discipline("IfcBuildingElementProxy", {"Вентиляция стояка"}) == "ventilation");
+  CHECK(fbv::assign_discipline("IfcWall", {"Structure frame", "Heating"}) == "structure");
   CHECK(fbv::decode_ifc_string("\\X2\\041C04300440043A0430\\X0\\") == "Марка");
   CHECK(fbv::decode_ifc_string("\\X2\\041D0421002D00310032\\X0\\") == "НС-12");
   CHECK(fbv::decode_ifc_string("\\S\\ ") == "\xC2\xA0");
@@ -128,7 +135,7 @@ int main() {
   if (package != nullptr) {
     fbv_manifest_info info{};
     CHECK(fbv_package_manifest(package, &info) == FBV_OK);
-    CHECK(info.format_version == 2);
+    CHECK(info.format_version == 3);
     CHECK(std::string(info.name) == "Sample Project");
     CHECK(std::string(info.source_schema) == "IFC4");
     CHECK(std::string(info.length_unit) == "millimetre");
@@ -257,6 +264,25 @@ int main() {
         "WHERE e.id = 1");
     CHECK(thickness.step_row());
     CHECK(near(thickness.column_double(0), 0.2));
+    auto tile_rows = db.prepare("SELECT COUNT(*) FROM tile_elements");
+    CHECK(tile_rows.step_row());
+    CHECK(tile_rows.column_int64(0) == 4);
+    auto dup = db.prepare(
+        "SELECT COUNT(*) FROM (SELECT element_id FROM tile_elements GROUP BY element_id HAVING "
+        "COUNT(*) > 1)");
+    CHECK(dup.step_row());
+    CHECK(dup.column_int64(0) == 0);
+    auto wall_tile = db.prepare(
+        "SELECT t.discipline, t.storey_id FROM tiles t JOIN tile_elements te ON te.tile_id = t.id "
+        "WHERE te.element_id = 1");
+    CHECK(wall_tile.step_row());
+    CHECK(std::string(wall_tile.column_text(0)) == "architecture");
+    CHECK(wall_tile.column_int64(1) == storey.id);
+    auto proxy_tile = db.prepare(
+        "SELECT t.discipline FROM tiles t JOIN tile_elements te ON te.tile_id = t.id "
+        "JOIN elements e ON e.id = te.element_id WHERE e.ifc_class = 'IfcBuildingElementProxy'");
+    CHECK(proxy_tile.step_row());
+    CHECK(std::string(proxy_tile.column_text(0)).empty());
     fbv_package_close(package);
   }
 
@@ -643,25 +669,39 @@ END-ISO-10303-21;
     if (systems_pkg != nullptr) {
       fbv_manifest_info systems_info{};
       CHECK(fbv_package_manifest(systems_pkg, &systems_info) == FBV_OK);
-      CHECK(systems_info.format_version == 2);
+      CHECK(systems_info.format_version == 3);
       fbv_package_close(systems_pkg);
     }
     fbv::SqliteDb db(std::filesystem::path(systems.output) / "meta.sqlite", false);
-    auto names = db.prepare(
-        "SELECT s.name, e.name FROM system_elements se "
-        "JOIN systems s ON s.id = se.system_id "
-        "JOIN elements e ON e.id = se.element_id "
-        "ORDER BY s.name, e.name");
-    CHECK(names.step_row());
-    CHECK(names.column_text(0) == "Heating");
-    CHECK(names.column_text(1) == "Wall in system");
-    CHECK(names.step_row());
-    CHECK(names.column_text(0) == "Structure");
-    CHECK(names.column_text(1) == "Column out");
-    CHECK(names.step_row());
-    CHECK(names.column_text(0) == "Structure");
-    CHECK(names.column_text(1) == "Wall in system");
-    CHECK(!names.step_row());
+    {
+      auto tile_disc = db.prepare(
+          "SELECT e.name, t.discipline, t.storey_id IS NULL FROM elements e "
+          "JOIN tile_elements te ON te.element_id = e.id "
+          "JOIN tiles t ON t.id = te.tile_id ORDER BY e.name");
+      CHECK(tile_disc.step_row());
+      CHECK(std::string(tile_disc.column_text(0)) == "Column out");
+      CHECK(std::string(tile_disc.column_text(1)) == "structure");
+      CHECK(tile_disc.column_int64(2) == 1);
+      CHECK(tile_disc.step_row());
+      CHECK(std::string(tile_disc.column_text(0)) == "Wall in system");
+      CHECK(std::string(tile_disc.column_text(1)) == "heating");
+      CHECK(tile_disc.column_int64(2) == 1);
+      auto names = db.prepare(
+          "SELECT s.name, e.name FROM system_elements se "
+          "JOIN systems s ON s.id = se.system_id "
+          "JOIN elements e ON e.id = se.element_id "
+          "ORDER BY s.name, e.name");
+      CHECK(names.step_row());
+      CHECK(names.column_text(0) == "Heating");
+      CHECK(names.column_text(1) == "Wall in system");
+      CHECK(names.step_row());
+      CHECK(names.column_text(0) == "Structure");
+      CHECK(names.column_text(1) == "Column out");
+      CHECK(names.step_row());
+      CHECK(names.column_text(0) == "Structure");
+      CHECK(names.column_text(1) == "Wall in system");
+      CHECK(!names.step_row());
+    }
     std::string systems_report;
     CHECK(fbv::validate_package(systems.output, systems_report) == 0);
 

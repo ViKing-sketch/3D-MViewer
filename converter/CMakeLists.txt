@@ -1,6 +1,7 @@
 add_library(fbv_converter STATIC
   src/ifc_parse.cpp
   src/scene.cpp
+  src/discipline.cpp
   src/mesh_stream.cpp
   src/ifc_geom_mesh.cpp
   src/write_pkg.cpp

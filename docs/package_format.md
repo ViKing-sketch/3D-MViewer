@@ -1,4 +1,4 @@
-# Формат пакета `.fbvpkg` (format_version 1 и 2)
+# Формат пакета `.fbvpkg` (format_version 1, 2 и 3)
 
 Пакет — результат конвертера `fbvconv`. Это либо ZIP без сжатия (метод STORE), либо каталог с тем же составом. Имя файла обычно заканчивается на `.fbvpkg`. Версия задаётся полем `format_version` в `manifest.json`. Читатель обязан отвергнуть неизвестную версию.
 
@@ -89,7 +89,7 @@ model.fbvpkg
 
 ## meta.sqlite
 
-SQLite с FTS5. `schema_meta.format_version` равен `1` у старого пакета и `2` у нового. Таблицы ниже — общие; `systems` и `system_elements` есть только у версии 2, см. раздел format_version 2.
+SQLite с FTS5. `schema_meta.format_version` равен `1` у пакета версии 1, `2` у версии 2 и `3` у нового. Таблицы ниже — общие. `systems` и `system_elements` есть у версий 2 и 3. `tiles` и `tile_elements` есть у версии 3.
 
 | Таблица | Назначение |
 | --- | --- |
@@ -142,7 +142,7 @@ SQLite с FTS5. `schema_meta.format_version` равен `1` у старого п
 
 `elements.brep_ref` — номер записи с нуля.
 
-Это не BinTools OCCT. `format_version` 2 занят таблицами систем, а не B-Rep. Когда появится OCCT, кодек `bintools-zstd-v1` потребует следующую `format_version`, если разметка записи станет несовместимой. Читатель открывает пакет с неизвестным кодеком (свойства доступны) и возвращает ошибку на запрос точной геометрии.
+Это не BinTools OCCT. `format_version` 2 занят таблицами систем, `format_version` 3 — индексом тайлов, а не B-Rep. Кодек точной геометрии потребует следующую `format_version`. Читатель открывает пакет с неизвестным кодеком (свойства доступны) и возвращает ошибку на запрос точной геометрии. Файлы `mesh/elements/<id>.glb` тайлы не копируют: тайл — это строки индекса.
 
 ## ZIP
 
@@ -150,7 +150,7 @@ SQLite с FTS5. `schema_meta.format_version` равен `1` у старого п
 
 ## format_version 2
 
-Новый пакет пишет `format_version` 2. Читатель открывает 1 и 2. Любая другая версия — ошибка с номером версии, пакет не открывается.
+Читатель открывает 1, 2 и 3. Любая другая версия — ошибка с номером версии, пакет не открывается. Новый пакет пишет `format_version` 3.
 
 Версия 1 не содержит таблиц систем. Такой пакет открывается, список систем пуст, фильтр системы в просмотре не предлагается. Читатель не переписывает пакет версии 1 и не подменяет отсутствие таблиц пустым списком у версии 2.
 
@@ -172,18 +172,50 @@ CREATE TABLE system_elements(
 );
 ```
 
-`schema_meta.format_version` совпадает с manifest (`1` или `2`). У версии 2 отсутствие `systems` или `system_elements` — ошибка, а не «систем нет».
+`schema_meta.format_version` совпадает с manifest. У версии 2 и 3 отсутствие `systems` или `system_elements` — ошибка, а не «систем нет».
 
 Конвертер пишет `IfcSystem`, `IfcDistributionSystem` и `IfcBuildingSystem`. Состав берётся из `IfcRelAssignsToGroup`: элемент может входить в несколько систем. `IfcZone` в этот список не входит. `system_elements.element_id` — id строки `elements`, не STEP-id.
 
 `testdata/sample_model` и `testdata/sample_wall.fbvpkg` остаются версией 1.
 
+## format_version 3
+
+Тайл — это одна пара «этаж × дисциплина». Каждый элемент входит ровно в один тайл. Два независимых индекса не используются: просмотр и так фильтрует этаж и систему отдельно, а раздел даёт читателю один кусок без повтора элемента.
+
+`storey_id` NULL — элементы без этажа. `discipline` `''` — элементы без категории. Элемент с этажом и без дисциплины остаётся в тайле этого этажа с пустой дисциплиной и не пропадает.
+
+```sql
+CREATE TABLE tiles(
+  id INTEGER PRIMARY KEY,
+  storey_id INTEGER,
+  discipline TEXT NOT NULL,
+  element_count INTEGER NOT NULL
+);
+
+CREATE TABLE tile_elements(
+  tile_id INTEGER NOT NULL,
+  element_id INTEGER NOT NULL,
+  PRIMARY KEY (tile_id, element_id)
+);
+```
+
+Ключи дисциплины: `architecture`, `structure`, `ventilation`, `heating`, `electrical`, `plumbing`, `fire`, `equipment`.
+
+Дисциплина назначается так. Системы элемента идут по возрастанию id. Первое имя или описание, где есть одно из слов ниже, задаёт дисциплину и перекрывает класс. Если ни одна система не подошла, берётся таблица класса. Иначе дисциплина пустая.
+
+Слова в нижнем регистре, подстрока имени и описания: вентиля, воздух, hvac → ventilation; отоп, heating, котел, boiler → heating; элект, electric, освещ, lighting, кабел, cable → electrical; сантех, водопров, plumb, pipe → plumbing; пожар, fire → fire; архит, architect → architecture; конструк, structure, каркас → structure; оборуд, equipment → equipment.
+
+Класс сравнивается без префикса `Ifc` и в нижнем регистре. architecture: wall, slab, roof, covering, door, window, stair, ramp, railing, curtainwall, plate, chimney, shadingdevice, furniture, openingelement и варианты `*standardcase` / `*flight`. structure: beam, column, footing, pile, member, reinforcingbar, reinforcingmesh, tendon, tendonanchor. ventilation: ductsegment, ductfitting, airterminal, fan, damper и прочее оборудование воздуха. heating: boiler, spaceheater, burner, tubebundle. electrical: cablesegment, lightfixture, outlet, transformer и прочие электрические классы. plumbing: pipesegment, pipefitting, valve, pump, tank, sanitaryterminal. fire: firesuppressionterminal. equipment: transportelement, fastener, discreteaccessory, mechanicalfastener. `IfcSensor`, `IfcBuildingElementProxy` и общий `IfcFlowSegment` остаются без категории, пока система не задаст слово.
+
+Версия 3 обязана иметь и таблицы систем, и таблицы тайлов. Версия 2 без тайлов открывается, `tiles()` пуст. `schema_meta.format_version` совпадает с manifest.
+
 ## Проверка
 
 `pkg_validate <пакет>` и `fbvconv --validate <пакет>` возвращают 0, если:
 
-* `format_version` равен 1 или 2, а `schema_meta.format_version` ему равен;
-* у версии 2 есть таблицы `systems` и `system_elements`;
+* `format_version` равен 1, 2 или 3, а `schema_meta.format_version` ему равен;
+* у версии 2 и 3 есть таблицы `systems` и `system_elements`;
+* у версии 3 есть таблицы `tiles` и `tile_elements`;
 * каждый файл из `parts` существует, размер и SHA-256 совпадают;
 * счётчики manifest совпадают с `meta.sqlite`;
 * GUID элементов непусты и уникальны;
