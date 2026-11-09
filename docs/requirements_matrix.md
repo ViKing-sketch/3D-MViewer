@@ -27,7 +27,7 @@ PR #3 ответвился от `f983a71`, на один коммит раньш
 | FR-C-02 | нет | STEP завершается кодом 2. `xde_import` не читает файл |
 | FR-C-03 | частично | `lod0.glb` и GLB на элемент. `lod1` не пишется, инстансинг `EXT_mesh_gpu_instancing` не сделан |
 | FR-C-04 | частично | Пространство, типы, Pset, Qto, материалы, классификация, FTS5, `spec_views`. format_version 2 добавляет `systems` и `system_elements` (`IfcSystem`, `IfcDistributionSystem`, `IfcBuildingSystem`). Пакет версии 1 открывается без этих таблиц |
-| FR-C-05 | частично | `brep.pack` — мировые AABB (`analytic-box-v1`), не BinTools и не zstd |
+| FR-C-05 | частично | `brep.pack` — мировые AABB (`analytic-box-v1`), не BinTools и не zstd. format_version 4 добавляет пустой индекс `exact_geometry`; файл `geometry/elements/<id>.brep` пишется только когда есть форма OCCT, аналитический мешер её не пишет |
 | FR-C-06 | сделано | Локальный origin, метры, GlobalId. Образец со сдвигом около 10 км |
 | FR-C-07 | частично | `spec_views` по этажу, классу, типу, материалу |
 | FR-C-08 | частично | Лог рядом с пакетом, коды 0/2/3/4, причины в JSON |

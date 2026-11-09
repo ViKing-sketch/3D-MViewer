@@ -33,7 +33,7 @@ class PackageSession {
   final Directory? _temp;
   final Map<String, dynamic> manifest;
 
-  /// `manifest.format_version`. Versions 1, 2 and 3 open. 1 has no system or tile tables.
+  /// `manifest.format_version`. Versions 1 through 4 open. 1 has no system or tile tables.
   final int formatVersion;
 
   /// Directory that contains `manifest.json` and `mesh/`. For a zip package this
@@ -135,7 +135,7 @@ class PackageSession {
         jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync()))
             as Map<String, dynamic>;
     final version = manifest['format_version'];
-    if (version is! int || version < 1 || version > 3) {
+    if (version is! int || version < 1 || version > 4) {
       throw PackageException('Неподдерживаемая format_version: $version');
     }
     if (verifyParts) _verifyParts(root, manifest, hashes);
@@ -166,6 +166,12 @@ class PackageSession {
       db.dispose();
       throw PackageException(
         'В пакете format_version $version нет таблицы tiles',
+      );
+    }
+    if (version >= 4 && !_tableExists(db, 'exact_geometry')) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы exact_geometry',
       );
     }
     final count =
@@ -332,6 +338,24 @@ ORDER BY id
       [tileId],
     );
     return [for (final row in rows) row.columnAt(0) as int];
+  }
+
+  /// Optional BinTools files. Versions 1–3 have none; that is not an error.
+  /// An empty list means this package has no exact geometry. `brep.pack` is
+  /// not this list.
+  List<ExactGeometry> exactGeometry() {
+    if (formatVersion < 4) return const [];
+    final rows = _db.select(
+      'SELECT element_id, CAST(path AS BLOB), bytes FROM exact_geometry ORDER BY element_id',
+    );
+    return [
+      for (final row in rows)
+        ExactGeometry(
+          elementId: row.columnAt(0) as int,
+          path: packageText(row.columnAt(1)),
+          bytes: row.columnAt(2) as int,
+        ),
+    ];
   }
 
   /// Engineering systems. A format_version 1 package has none; that is not an error.

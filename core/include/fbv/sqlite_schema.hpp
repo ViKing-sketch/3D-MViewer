@@ -2,16 +2,16 @@
 
 namespace fbv {
 
-// meta.sqlite schema written for format_version 3.
-// Version 1 omits systems, system_elements, tiles and tile_elements.
-// Version 2 adds systems and system_elements. Version 3 also adds tiles.
+// meta.sqlite schema written for format_version 4.
+// Version 1 omits systems, tiles and exact_geometry.
+// Version 2 adds systems. Version 3 adds tiles. Version 4 adds exact_geometry.
 // schema_meta.format_version matches the manifest. See docs/package_format.md.
 inline constexpr const char* kSqliteSchema = R"SQL(
 CREATE TABLE schema_meta(
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT INTO schema_meta(key, value) VALUES ('format_version', '3');
+INSERT INTO schema_meta(key, value) VALUES ('format_version', '4');
 
 CREATE TABLE spatial(
   id INTEGER PRIMARY KEY,
@@ -177,6 +177,12 @@ CREATE TABLE tile_elements(
 
 CREATE INDEX idx_tiles_storey ON tiles(storey_id);
 CREATE INDEX idx_tile_elements_element ON tile_elements(element_id);
+
+CREATE TABLE exact_geometry(
+  element_id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL,
+  bytes INTEGER NOT NULL
+);
 )SQL";
 
 }  // namespace fbv

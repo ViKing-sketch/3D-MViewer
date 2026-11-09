@@ -5,7 +5,7 @@
 Нормативные документы:
 
 * [Техническое задание v0.2](docs/TZ_Field_BIM_Viewer_v0_2.md)
-* [Формат пакета format_version 1, 2 и 3](docs/package_format.md)
+* [Формат пакета format_version 1, 2, 3 и 4](docs/package_format.md)
 * [Принятые решения и статус M0](docs/decisions.md)
 * [Матрица требований](docs/requirements_matrix.md)
 * [Очередь приоритетов](docs/priority_plan.md)

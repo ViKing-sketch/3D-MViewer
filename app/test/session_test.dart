@@ -124,6 +124,7 @@ void main() {
     expect(session.formatVersion, 1);
     expect(session.systems(), isEmpty);
     expect(session.tiles(), isEmpty);
+    expect(session.exactGeometry(), isEmpty);
     final wall = session.elements().firstWhere(
       (element) => element.name == 'Wall W-1',
     );
@@ -135,7 +136,7 @@ void main() {
     final copy = _copySample();
     try {
       final manifest = _readManifest(copy);
-      manifest['format_version'] = 4;
+      manifest['format_version'] = 5;
       _writeManifest(copy, manifest);
       expect(
         () => PackageSession.openPath(copy.path),
@@ -143,7 +144,7 @@ void main() {
           isA<PackageException>().having(
             (error) => error.message,
             'message',
-            contains('Неподдерживаемая format_version: 4'),
+            contains('Неподдерживаемая format_version: 5'),
           ),
         ),
       );
@@ -222,14 +223,69 @@ void main() {
       expect(session.formatVersion, 3);
       final tiles = session.tiles();
       expect(tiles, hasLength(2));
-      final architecture = tiles.firstWhere((tile) => tile.discipline == 'architecture');
+      final architecture = tiles.firstWhere(
+        (tile) => tile.discipline == 'architecture',
+      );
       expect(architecture.elementIds, [1]);
       expect(architecture.storeyId, isNotNull);
       final none = tiles.firstWhere((tile) => tile.discipline.isEmpty);
       expect(none.elementIds, [4]);
       final ids = tiles.expand((tile) => tile.elementIds).toList()..sort();
       expect(ids, [1, 4]);
+      expect(session.exactGeometry(), isEmpty);
       session.close();
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+
+  test('format_version 4 opens with an empty exact-geometry index', () {
+    final copy = _copySample();
+    try {
+      _installTiles(copy);
+      configureSqlite();
+      final db = sqlite3.open(p.join(copy.path, 'meta.sqlite'));
+      db.execute(
+        "UPDATE schema_meta SET value = '4' WHERE key = 'format_version'",
+      );
+      db.execute(
+        'CREATE TABLE exact_geometry(element_id INTEGER PRIMARY KEY, path TEXT NOT NULL, bytes INTEGER NOT NULL)',
+      );
+      db.dispose();
+      final manifest = _readManifest(copy);
+      manifest['format_version'] = 4;
+      _refreshPart(copy, manifest, 'meta.sqlite');
+      _writeManifest(copy, manifest);
+      final session = PackageSession.openPath(copy.path);
+      expect(session.formatVersion, 4);
+      expect(session.exactGeometry(), isEmpty);
+      expect(session.tiles(), isNotEmpty);
+      session.close();
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+
+  test('format_version 4 without exact_geometry fails explicitly', () {
+    final copy = _copySample();
+    try {
+      _installTiles(copy);
+      configureSqlite();
+      final db = sqlite3.open(p.join(copy.path, 'meta.sqlite'));
+      db.execute(
+        "UPDATE schema_meta SET value = '4' WHERE key = 'format_version'",
+      );
+      db.dispose();
+      final manifest = _readManifest(copy);
+      manifest['format_version'] = 4;
+      _refreshPart(copy, manifest, 'meta.sqlite');
+      _writeManifest(copy, manifest);
+      expect(
+        () => PackageSession.openPath(copy.path),
+        throwsA(
+          predicate((error) => error.toString().contains('exact_geometry')),
+        ),
+      );
     } finally {
       copy.deleteSync(recursive: true);
     }

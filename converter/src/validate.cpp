@@ -129,6 +129,32 @@ int validate_package(const std::string& path, std::string& report) {
                              " is missing table tiles or tile_elements");
           }
         }
+        if (format_version >= 4) {
+          auto exact = db.prepare(
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exact_geometry'");
+          if (!exact.step_row()) {
+            errors.push_back("format_version " + std::to_string(format_version) +
+                             " is missing table exact_geometry");
+          } else {
+            auto rows = db.prepare("SELECT path, bytes FROM exact_geometry");
+            while (rows.step_row()) {
+              const std::string rel = rows.column_text(0);
+              if (rel.empty() || rel.find("..") != std::string::npos) {
+                errors.push_back("exact_geometry path is not inside the package");
+                continue;
+              }
+              const auto file = root / std::filesystem::path(rel);
+              if (!std::filesystem::is_regular_file(file)) {
+                errors.push_back("missing exact geometry " + rel);
+                continue;
+              }
+              if (static_cast<std::int64_t>(std::filesystem::file_size(file)) !=
+                  rows.column_int64(1)) {
+                errors.push_back("size mismatch for exact geometry " + rel);
+              }
+            }
+          }
+        }
         auto count_elements = db.prepare("SELECT COUNT(*) FROM elements");
         count_elements.step_row();
         const int element_count = static_cast<int>(count_elements.column_int64(0));
