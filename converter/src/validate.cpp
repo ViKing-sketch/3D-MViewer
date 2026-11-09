@@ -115,7 +115,18 @@ int validate_package(const std::string& path, std::string& report) {
           auto members = db.prepare(
               "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'system_elements'");
           if (!systems.step_row() || !members.step_row()) {
-            errors.push_back("format_version 2 is missing table systems or system_elements");
+            errors.push_back("format_version " + std::to_string(format_version) +
+                             " is missing table systems or system_elements");
+          }
+        }
+        if (format_version >= 3) {
+          auto tiles =
+              db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tiles'");
+          auto tile_elements = db.prepare(
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tile_elements'");
+          if (!tiles.step_row() || !tile_elements.step_row()) {
+            errors.push_back("format_version " + std::to_string(format_version) +
+                             " is missing table tiles or tile_elements");
           }
         }
         auto count_elements = db.prepare("SELECT COUNT(*) FROM elements");

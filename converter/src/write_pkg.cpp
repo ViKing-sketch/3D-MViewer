@@ -1,5 +1,6 @@
 #include "write_pkg.hpp"
 
+#include "discipline.hpp"
 #include "mesh_stream.hpp"
 #include "scene.hpp"
 
@@ -586,6 +587,56 @@ void write_sqlite(const Scene& scene, const std::filesystem::path& path) {
       sqlite3_reset(insert_member.get());
       sqlite3_clear_bindings(insert_member.get());
     }
+  }
+
+  std::map<std::int64_t, std::vector<std::pair<std::int64_t, std::string>>> systems_of;
+  for (const SystemInfo& system : scene.systems) {
+    const std::string text = system.name + " " + system.description;
+    for (std::int64_t element_id : system.element_ids) {
+      systems_of[element_id].push_back({system.id, text});
+    }
+  }
+  struct TileKey {
+    std::int64_t storey = 0;
+    std::string discipline;
+    bool operator<(const TileKey& other) const {
+      return std::tie(storey, discipline) < std::tie(other.storey, other.discipline);
+    }
+  };
+  std::map<TileKey, std::vector<std::int64_t>> tile_members;
+  for (const Element& element : scene.elements) {
+    std::vector<std::pair<std::int64_t, std::string>> membership = systems_of[element.id];
+    std::sort(membership.begin(), membership.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<std::string> texts;
+    texts.reserve(membership.size());
+    for (const auto& item : membership) texts.push_back(item.second);
+    TileKey key;
+    key.storey = element.storey_id;
+    key.discipline = assign_discipline(element.ifc_class, texts);
+    tile_members[key].push_back(element.id);
+  }
+  auto insert_tile =
+      db.prepare("INSERT INTO tiles(id, storey_id, discipline, element_count) VALUES (?,?,?,?)");
+  auto insert_tile_element =
+      db.prepare("INSERT INTO tile_elements(tile_id, element_id) VALUES (?,?)");
+  std::int64_t tile_id = 1;
+  for (const auto& entry : tile_members) {
+    insert_tile.bind_int64(1, tile_id);
+    bind_optional_id(insert_tile, 2, entry.first.storey);
+    insert_tile.bind_text(3, entry.first.discipline);
+    insert_tile.bind_int64(4, static_cast<std::int64_t>(entry.second.size()));
+    insert_tile.step_done();
+    sqlite3_reset(insert_tile.get());
+    sqlite3_clear_bindings(insert_tile.get());
+    for (std::int64_t element_id : entry.second) {
+      insert_tile_element.bind_int64(1, tile_id);
+      insert_tile_element.bind_int64(2, element_id);
+      insert_tile_element.step_done();
+      sqlite3_reset(insert_tile_element.get());
+      sqlite3_clear_bindings(insert_tile_element.get());
+    }
+    ++tile_id;
   }
 
   struct CountKey {

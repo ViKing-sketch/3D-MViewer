@@ -33,7 +33,7 @@ class PackageSession {
   final Directory? _temp;
   final Map<String, dynamic> manifest;
 
-  /// `manifest.format_version`. Only 1 and 2 open. 1 has no system tables.
+  /// `manifest.format_version`. Versions 1, 2 and 3 open. 1 has no system or tile tables.
   final int formatVersion;
 
   /// Directory that contains `manifest.json` and `mesh/`. For a zip package this
@@ -135,7 +135,7 @@ class PackageSession {
         jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync()))
             as Map<String, dynamic>;
     final version = manifest['format_version'];
-    if (version is! int || (version != 1 && version != 2)) {
+    if (version is! int || version < 1 || version > 3) {
       throw PackageException('Неподдерживаемая format_version: $version');
     }
     if (verifyParts) _verifyParts(root, manifest, hashes);
@@ -159,6 +159,13 @@ class PackageSession {
       db.dispose();
       throw PackageException(
         'В пакете format_version $version нет таблицы systems',
+      );
+    }
+    if (version >= 3 &&
+        (!_tableExists(db, 'tiles') || !_tableExists(db, 'tile_elements'))) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы tiles',
       );
     }
     final count =
@@ -295,6 +302,36 @@ ORDER BY e.id
           systemIds: members[row.columnAt(0) as int] ?? const [],
         ),
     ];
+  }
+
+  /// Storey × discipline tiles. Versions 1 and 2 have none; that is not an error.
+  /// An empty [TileInfo.discipline] is the bucket for elements with no category.
+  /// A null [TileInfo.storeyId] is the bucket for elements with no storey.
+  List<TileInfo> tiles() {
+    if (formatVersion < 3) return const [];
+    final rows = _db.select('''
+SELECT id, storey_id, CAST(discipline AS BLOB), element_count
+FROM tiles
+ORDER BY id
+''');
+    return [
+      for (final row in rows)
+        TileInfo(
+          id: row.columnAt(0) as int,
+          storeyId: row.columnAt(1) as int?,
+          discipline: packageText(row.columnAt(2)),
+          elementCount: row.columnAt(3) as int,
+          elementIds: _tileMembers(row.columnAt(0) as int),
+        ),
+    ];
+  }
+
+  List<int> _tileMembers(int tileId) {
+    final rows = _db.select(
+      'SELECT element_id FROM tile_elements WHERE tile_id = ?1 ORDER BY element_id',
+      [tileId],
+    );
+    return [for (final row in rows) row.columnAt(0) as int];
   }
 
   /// Engineering systems. A format_version 1 package has none; that is not an error.

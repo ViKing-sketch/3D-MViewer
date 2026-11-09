@@ -89,6 +89,26 @@ class SystemInfo {
   final String guid;
 }
 
+class TileInfo {
+  TileInfo({
+    required this.id,
+    required this.storeyId,
+    required this.discipline,
+    required this.elementCount,
+    required this.elementIds,
+  });
+
+  final int id;
+
+  /// Null when the tile is the bucket for elements with no storey.
+  final int? storeyId;
+
+  /// Empty when the tile is the bucket for elements with no discipline.
+  final String discipline;
+  final int elementCount;
+  final List<int> elementIds;
+}
+
 class ElementInfo {
   ElementInfo({
     required this.id,

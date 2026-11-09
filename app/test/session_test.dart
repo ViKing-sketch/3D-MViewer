@@ -123,6 +123,7 @@ void main() {
     final session = PackageSession.openPath(path);
     expect(session.formatVersion, 1);
     expect(session.systems(), isEmpty);
+    expect(session.tiles(), isEmpty);
     final wall = session.elements().firstWhere(
       (element) => element.name == 'Wall W-1',
     );
@@ -134,7 +135,7 @@ void main() {
     final copy = _copySample();
     try {
       final manifest = _readManifest(copy);
-      manifest['format_version'] = 3;
+      manifest['format_version'] = 4;
       _writeManifest(copy, manifest);
       expect(
         () => PackageSession.openPath(copy.path),
@@ -142,7 +143,7 @@ void main() {
           isA<PackageException>().having(
             (error) => error.message,
             'message',
-            contains('Неподдерживаемая format_version: 3'),
+            contains('Неподдерживаемая format_version: 4'),
           ),
         ),
       );
@@ -206,6 +207,28 @@ void main() {
       );
       expect(wall.systemIds, [1]);
       expect(column.systemIds, isEmpty);
+      expect(session.tiles(), isEmpty);
+      session.close();
+    } finally {
+      copy.deleteSync(recursive: true);
+    }
+  });
+
+  test('format_version 3 reads one tile per element', () {
+    final copy = _copySample();
+    try {
+      _installTiles(copy);
+      final session = PackageSession.openPath(copy.path);
+      expect(session.formatVersion, 3);
+      final tiles = session.tiles();
+      expect(tiles, hasLength(2));
+      final architecture = tiles.firstWhere((tile) => tile.discipline == 'architecture');
+      expect(architecture.elementIds, [1]);
+      expect(architecture.storeyId, isNotNull);
+      final none = tiles.firstWhere((tile) => tile.discipline.isEmpty);
+      expect(none.elementIds, [4]);
+      final ids = tiles.expand((tile) => tile.elementIds).toList()..sort();
+      expect(ids, [1, 4]);
       session.close();
     } finally {
       copy.deleteSync(recursive: true);
@@ -273,6 +296,43 @@ CREATE TABLE system_elements(
   db.dispose();
   final manifest = _readManifest(root);
   manifest['format_version'] = 2;
+  _refreshPart(root, manifest, 'meta.sqlite');
+  _writeManifest(root, manifest);
+}
+
+void _installTiles(Directory root) {
+  _installHeating(root);
+  configureSqlite();
+  final db = sqlite3.open(p.join(root.path, 'meta.sqlite'));
+  db.execute("UPDATE schema_meta SET value = '3' WHERE key = 'format_version'");
+  db.execute('''
+CREATE TABLE tiles(
+  id INTEGER PRIMARY KEY,
+  storey_id INTEGER,
+  discipline TEXT NOT NULL,
+  element_count INTEGER NOT NULL
+)''');
+  db.execute('''
+CREATE TABLE tile_elements(
+  tile_id INTEGER NOT NULL,
+  element_id INTEGER NOT NULL,
+  PRIMARY KEY (tile_id, element_id)
+)''');
+  final storey = db.select(
+    "SELECT storey_id FROM elements WHERE name = 'Wall W-1'",
+  );
+  final storeyId = storey.first.columnAt(0) as int;
+  db.execute(
+    'INSERT INTO tiles(id, storey_id, discipline, element_count) VALUES (1, $storeyId, \'architecture\', 1)',
+  );
+  db.execute(
+    'INSERT INTO tiles(id, storey_id, discipline, element_count) VALUES (2, $storeyId, \'\', 1)',
+  );
+  db.execute('INSERT INTO tile_elements(tile_id, element_id) VALUES (1, 1)');
+  db.execute('INSERT INTO tile_elements(tile_id, element_id) VALUES (2, 4)');
+  db.dispose();
+  final manifest = _readManifest(root);
+  manifest['format_version'] = 3;
   _refreshPart(root, manifest, 'meta.sqlite');
   _writeManifest(root, manifest);
 }
