@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -29,6 +30,7 @@ class ConverterPageState extends State<ConverterPage> {
   List<CatalogEntry> _entries = const [];
   String? _running;
   String _log = '';
+  StageProgress? _progress;
   final Map<String, int> _codes = {};
 
   @override
@@ -54,6 +56,39 @@ class ConverterPageState extends State<ConverterPage> {
     setState(() => _entries = listConverterFolder(_folder.text.trim()));
   }
 
+  Future<String> _collect(
+    Stream<List<int>> stream,
+    void Function(String line) onLine,
+  ) {
+    final completer = Completer<String>();
+    final buffer = StringBuffer();
+    var pending = '';
+    stream
+        .transform(utf8.decoder)
+        .listen(
+          (chunk) {
+            pending += chunk;
+            while (true) {
+              final nl = pending.indexOf('\n');
+              if (nl < 0) break;
+              final line = pending.substring(0, nl);
+              pending = pending.substring(nl + 1);
+              buffer.writeln(line);
+              onLine(line);
+            }
+          },
+          onDone: () {
+            if (pending.isNotEmpty) {
+              buffer.write(pending);
+              onLine(pending);
+            }
+            completer.complete(buffer.toString());
+          },
+          onError: completer.completeError,
+        );
+    return completer.future;
+  }
+
   Future<void> convert(CatalogEntry entry) async {
     if (_running != null || entry.kind != CatalogKind.ifc) return;
     final output = outputDirectoryFor(entry.path);
@@ -64,18 +99,28 @@ class ConverterPageState extends State<ConverterPage> {
     setState(() {
       _running = entry.path;
       _log = '';
+      _progress = null;
     });
     try {
       final process = await Process.start(_program.text.trim(), [
         ...converterArguments(entry.path, output),
       ]);
-      final stdoutText = process.stdout.transform(utf8.decoder).join();
-      final stderrText = process.stderr.transform(utf8.decoder).join();
+      StageProgress? latest;
+      void note(String line) {
+        final mark = parseStageProgress(line);
+        if (mark == null || !mounted) return;
+        latest = mark;
+        setState(() => _progress = mark);
+      }
+
+      final stdoutText = _collect(process.stdout, note);
+      final stderrText = _collect(process.stderr, note);
       final code = await process.exitCode;
       final log = '${await stdoutText}${await stderrText}';
       if (!mounted) return;
       setState(() {
         _log = log;
+        _progress = latest;
         _codes[entry.path] = code;
         _running = null;
       });
@@ -132,10 +177,14 @@ class ConverterPageState extends State<ConverterPage> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text(strings.converterRunning),
+                child: Text(
+                  _progress == null
+                      ? strings.converterRunning
+                      : '${strings.converterRunning} ${_progress!.done}/${_progress!.total}',
+                ),
               ),
             ),
-            const LinearProgressIndicator(),
+            LinearProgressIndicator(value: _progress?.fraction),
           ],
           Expanded(
             child: _entries.isEmpty

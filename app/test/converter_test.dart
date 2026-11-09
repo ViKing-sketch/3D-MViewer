@@ -37,6 +37,9 @@ void main() {
       outputDirectoryFor('/in/wall.ifc'),
       '/out/wall.fbv'.replaceFirst('/out', '/in'),
     );
+    expect(parseStageProgress('FBV_PROGRESS 1 2')!.fraction, 0.5);
+    expect(parseStageProgress('FBV_PROGRESS 2 2')!.done, 2);
+    expect(parseStageProgress('note: hello'), isNull);
   });
 
   testWidgets('convert runs fbvconv and shows the log', (tester) async {
@@ -46,6 +49,8 @@ void main() {
       ..writeAsStringSync('''#!/bin/sh
 mkdir -p "\$3"
 echo converted "\$1" > "\$3/marker.txt"
+echo FBV_PROGRESS 1 2 >&2
+echo FBV_PROGRESS 2 2 >&2
 echo converted "\$1"
 exit 0
 ''');
@@ -76,6 +81,7 @@ exit 0
       }
     });
     expect(find.textContaining('converted'), findsOneWidget);
+    expect(find.textContaining('FBV_PROGRESS 2 2'), findsOneWidget);
     expect(find.textContaining('Готово, код 0'), findsOneWidget);
     expect(
       File(p.join(root.path, 'wall.fbv', 'marker.txt')).readAsStringSync(),
