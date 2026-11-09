@@ -147,6 +147,27 @@ class S {
         : 'Scene: $lod, element GLBs: $elementFiles$boxText, drawn: $drawn';
   }
 
+  String get converter => russian ? 'Конвертер' : 'Converter';
+  String get converterFolder =>
+      russian ? 'Каталог с IFC и пакетами' : 'Folder with IFC and packages';
+  String get converterProgram =>
+      russian ? 'Программа fbvconv' : 'fbvconv program';
+  String get convert => russian ? 'Конвертировать' : 'Convert';
+  String get converterEmpty => russian
+      ? 'В каталоге нет IFC и пакетов'
+      : 'No IFC or packages in this folder';
+  String get converterLog => russian ? 'Журнал' : 'Log';
+  String get converterRunning => russian ? 'Идёт конвертация' : 'Converting';
+  String get converterIdle => russian ? 'Не запускалась' : 'Not run';
+  String converterDone(int code) => russian
+      ? (code == 0 ? 'Готово, код 0' : 'Ошибка, код $code')
+      : (code == 0 ? 'Done, code 0' : 'Failed, code $code');
+  String get converterExists => russian
+      ? 'Каталог результата уже есть. Он не перезаписывается.'
+      : 'The output folder already exists. It is not overwritten.';
+  String get kindIfc => 'IFC';
+  String get kindPackage => russian ? 'Пакет' : 'Package';
+
   String lengthMm(double metres) {
     final mm = metres * 1000.0;
     final text = (mm - mm.round()).abs() < 1e-3

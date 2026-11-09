@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import 'appearance.dart';
+import 'converter_page.dart';
 import 'model.dart';
 import 'model_page.dart';
 import 'package_import.dart';
@@ -137,7 +138,22 @@ class LibraryPageState extends State<LibraryPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(strings.library),
-        actions: const [AppearanceMenu()],
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (context) => ConverterPage(
+                    strings: strings,
+                    initialDirectory: _path.text.trim(),
+                  ),
+                ),
+              );
+            },
+            child: Text(strings.converter),
+          ),
+          const AppearanceMenu(),
+        ],
       ),
       body: Column(
         children: [
