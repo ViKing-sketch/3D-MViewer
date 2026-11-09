@@ -184,9 +184,7 @@ class ConverterPageState extends State<ConverterPage> {
                 ),
               ),
             ),
-            LinearProgressIndicator(
-              value: _progress == null ? null : _progress!.fraction,
-            ),
+            LinearProgressIndicator(value: _progress?.fraction),
           ],
           Expanded(
             child: _entries.isEmpty
