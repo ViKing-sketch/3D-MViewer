@@ -283,9 +283,24 @@ int main() {
         "JOIN elements e ON e.id = te.element_id WHERE e.ifc_class = 'IfcBuildingElementProxy'");
     CHECK(proxy_tile.step_row());
     CHECK(std::string(proxy_tile.column_text(0)).empty());
-    auto exact = db.prepare("SELECT COUNT(*) FROM exact_geometry");
-    CHECK(exact.step_row());
-    CHECK(exact.column_int64(0) == 0);
+    auto exact =
+        db.prepare("SELECT element_id, path, bytes FROM exact_geometry ORDER BY element_id");
+    int exact_rows = 0;
+    while (exact.step_row()) {
+      ++exact_rows;
+      const auto id = exact.column_int64(0);
+      const std::string path = exact.column_text(1);
+      const auto nbytes = exact.column_int64(2);
+      CHECK(path == "geometry/elements/" + std::to_string(id) + ".brep");
+      CHECK(nbytes > 0);
+      const auto file = directory / std::filesystem::path(path);
+      CHECK(std::filesystem::is_regular_file(file));
+      CHECK(static_cast<std::int64_t>(std::filesystem::file_size(file)) == nbytes);
+    }
+    if (ios_mesh)
+      CHECK(exact_rows > 0);
+    else
+      CHECK(exact_rows == 0);
     fbv_package_close(package);
   }
 

@@ -639,6 +639,18 @@ void write_sqlite(const Scene& scene, const std::filesystem::path& path) {
     ++tile_id;
   }
 
+  auto insert_exact =
+      db.prepare("INSERT INTO exact_geometry(element_id, path, bytes) VALUES (?,?,?)");
+  for (const Element& element : scene.elements) {
+    if (element.exact_brep.empty()) continue;
+    insert_exact.bind_int64(1, element.id);
+    insert_exact.bind_text(2, "geometry/elements/" + std::to_string(element.id) + ".brep");
+    insert_exact.bind_int64(3, static_cast<std::int64_t>(element.exact_brep.size()));
+    insert_exact.step_done();
+    sqlite3_reset(insert_exact.get());
+    sqlite3_clear_bindings(insert_exact.get());
+  }
+
   struct CountKey {
     std::int64_t storey = 0;
     std::string ifc_class;
@@ -797,6 +809,12 @@ void write_scene_package(Scene& scene, const ConvertOptions& options,
     }
     write_glb_file(scene, staging / "mesh" / "lod0.glb", meshed, true);
     clear_mesh_scratch(scene);
+    for (const Element& element : scene.elements) {
+      if (element.exact_brep.empty()) continue;
+      const auto dir = staging / "geometry" / "elements";
+      std::filesystem::create_directories(dir);
+      write_binary(dir / (std::to_string(element.id) + ".brep"), element.exact_brep);
+    }
     write_sqlite(scene, staging / "meta.sqlite");
     if (options.write_brep) write_brep(scene, staging / "brep.pack", staging / "brep.index");
 
