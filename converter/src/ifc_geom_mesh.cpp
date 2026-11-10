@@ -17,8 +17,11 @@
 
 #include "ifcgeom/Iterator.h"
 #include "ifcgeom/hybrid_kernel.h"
+#include "ifcgeom/kernels/opencascade/OpenCascadeConversionResult.h"
 #include "ifcparse/IfcFile.h"
 #include "ifcparse/IfcLogger.h"
+
+#include <BinTools.hxx>
 #endif
 
 namespace fbv {
@@ -105,6 +108,57 @@ std::string fresh_log() {
   const std::string fresh = full.size() >= mark ? full.substr(mark) : full;
   mark = full.size();
   return fresh;
+}
+
+void capture_exact_breps(Scene& scene, IfcParse::IfcFile& model,
+                         const ifcopenshell::geometry::Settings& mesh_settings,
+                         const std::unordered_map<std::int64_t, std::size_t>& by_step) {
+  // A second iterator. The triangulation pass drops the OCCT shape after copying
+  // triangles, so those bytes are not still available. Failure here leaves the
+  // meshes in place and the exact slot empty for the elements that did not write.
+  int written = 0;
+  try {
+    ifcopenshell::geometry::Settings settings = mesh_settings;
+    settings.get<ifcopenshell::geometry::settings::IteratorOutput>().value =
+        ifcopenshell::geometry::settings::NATIVE;
+    IfcGeom::Iterator iterator(
+        ifcopenshell::geometry::kernels::construct(&model, "opencascade", settings), settings,
+        &model, std::vector<IfcGeom::filter_t>{}, scene.threads);
+    if (!iterator.initialize()) {
+      scene.notes.push_back("exact geometry iterator initialized no shapes");
+    } else {
+      do {
+        try {
+          IfcGeom::BRepElement* brep = iterator.get_native();
+          if (brep == nullptr) continue;
+          const auto found = by_step.find(static_cast<std::int64_t>(brep->id()));
+          if (found == by_step.end()) continue;
+          std::unique_ptr<IfcGeom::ConversionResultShape> compound(brep->geometry().as_compound());
+          if (!compound) continue;
+          const auto* occt =
+              dynamic_cast<const ifcopenshell::geometry::OpenCascadeShape*>(compound.get());
+          if (occt == nullptr || occt->shape().IsNull()) continue;
+          std::ostringstream stream(std::ios::binary);
+          // OCCT 7.8 writes a stream as void. The bool overload is the file path.
+          BinTools::Write(occt->shape(), stream);
+          const std::string bytes = stream.str();
+          if (bytes.empty()) continue;
+          scene.elements[found->second].exact_brep.assign(bytes.begin(), bytes.end());
+          ++written;
+        } catch (const std::exception& ex) {
+          scene.notes.push_back(std::string("exact geometry skipped: ") + ex.what());
+        } catch (...) {
+          scene.notes.push_back("exact geometry skipped");
+        }
+      } while (iterator.next());
+    }
+  } catch (const std::exception& ex) {
+    scene.notes.push_back(std::string("exact geometry iterator failed: ") + ex.what());
+  } catch (...) {
+    scene.notes.push_back("exact geometry iterator failed");
+  }
+  if (!scene.ifc_log.empty() && scene.ifc_log.back() != '\n') scene.ifc_log.push_back('\n');
+  scene.ifc_log += "exact geometry elements " + std::to_string(written) + "\n";
 }
 
 std::string reason_for(const std::string& log, const std::string& guid,
@@ -233,42 +287,45 @@ void apply_ifcopenshell_geometry(Scene& scene, const std::string& ifc_text,
     settings.get<ifcopenshell::geometry::settings::IteratorOutput>().value =
         ifcopenshell::geometry::settings::TRIANGULATED;
 
-    IfcGeom::Iterator iterator(
-        ifcopenshell::geometry::kernels::construct(model.get(), "opencascade", settings), settings,
-        model.get(), std::vector<IfcGeom::filter_t>{}, scene.threads);
-    scene.ifcopenshell_ran = true;
-    if (!iterator.initialize()) {
-      scene.ifc_log = fresh_log();
-      if (scene.ifc_log.empty()) {
-        scene.ifc_log = "IfcOpenShell iterator initialized no geometrical elements.\n";
-      }
-    } else {
-      do {
-        IfcGeom::Element* geom = iterator.get();
-        if (geom == nullptr) break;
-        auto* tri = static_cast<IfcGeom::TriangulationElement*>(geom);
-        const auto step = static_cast<std::int64_t>(tri->id());
-        const auto found = by_step.find(step);
-        if (found == by_step.end()) continue;
-        Element& element = scene.elements[found->second];
-        if (element.mesh.position.empty() && !element.mesh_scratch.empty())
-          reload_mesh_world(scene, element);
-        const std::size_t before = element.mesh.indices.size();
-        copy_triangulation(tri->geometry(), element.mesh);
-        if (element.mesh.indices.size() > before) {
-          element.has_mesh = true;
-          element.mesh_source = "ifcopenshell-occt";
-          element.geometry_failure.clear();
-          element.failure_reason.clear();
-          commit_mesh(scene, element, options);
+    {
+      IfcGeom::Iterator iterator(
+          ifcopenshell::geometry::kernels::construct(model.get(), "opencascade", settings),
+          settings, model.get(), std::vector<IfcGeom::filter_t>{}, scene.threads);
+      scene.ifcopenshell_ran = true;
+      if (!iterator.initialize()) {
+        scene.ifc_log = fresh_log();
+        if (scene.ifc_log.empty()) {
+          scene.ifc_log = "IfcOpenShell iterator initialized no geometrical elements.\n";
         }
-      } while (iterator.next());
-      scene.ifc_log = fresh_log();
-      std::ostringstream unit;
-      unit << "ifcopenshell length unit " << iterator.unit_name() << " magnitude "
-           << iterator.unit_magnitude() << "\n";
-      scene.ifc_log += unit.str();
+      } else {
+        do {
+          IfcGeom::Element* geom = iterator.get();
+          if (geom == nullptr) break;
+          auto* tri = static_cast<IfcGeom::TriangulationElement*>(geom);
+          const auto step = static_cast<std::int64_t>(tri->id());
+          const auto found = by_step.find(step);
+          if (found == by_step.end()) continue;
+          Element& element = scene.elements[found->second];
+          if (element.mesh.position.empty() && !element.mesh_scratch.empty())
+            reload_mesh_world(scene, element);
+          const std::size_t before = element.mesh.indices.size();
+          copy_triangulation(tri->geometry(), element.mesh);
+          if (element.mesh.indices.size() > before) {
+            element.has_mesh = true;
+            element.mesh_source = "ifcopenshell-occt";
+            element.geometry_failure.clear();
+            element.failure_reason.clear();
+            commit_mesh(scene, element, options);
+          }
+        } while (iterator.next());
+        scene.ifc_log = fresh_log();
+        std::ostringstream unit;
+        unit << "ifcopenshell length unit " << iterator.unit_name() << " magnitude "
+             << iterator.unit_magnitude() << "\n";
+        scene.ifc_log += unit.str();
+      }
     }
+    capture_exact_breps(scene, *model, settings, by_step);
 
     for (Element& element : scene.elements) {
       if (element.has_mesh || !element.has_representation) continue;

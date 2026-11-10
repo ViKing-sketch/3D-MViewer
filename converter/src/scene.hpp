@@ -116,6 +116,8 @@ struct Element {
   float color[3]{0.7f, 0.72f, 0.74f};
   int mesh_node = -1;
   int brep_ref = -1;
+  // Uncompressed BinTools bytes of the OCCT shape. Empty means no exact geometry.
+  std::vector<std::uint8_t> exact_brep;
 };
 
 struct Scene {
