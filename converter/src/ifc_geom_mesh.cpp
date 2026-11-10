@@ -139,7 +139,8 @@ void capture_exact_breps(Scene& scene, IfcParse::IfcFile& model,
               dynamic_cast<const ifcopenshell::geometry::OpenCascadeShape*>(compound.get());
           if (occt == nullptr || occt->shape().IsNull()) continue;
           std::ostringstream stream(std::ios::binary);
-          if (!BinTools::Write(occt->shape(), stream)) continue;
+          // OCCT 7.8 writes a stream as void. The bool overload is the file path.
+          BinTools::Write(occt->shape(), stream);
           const std::string bytes = stream.str();
           if (bytes.empty()) continue;
           scene.elements[found->second].exact_brep.assign(bytes.begin(), bytes.end());
