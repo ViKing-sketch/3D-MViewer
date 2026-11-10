@@ -6,17 +6,26 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCASCADE REQUIRED)
 
-add_executable(occt_probe probe.cpp)
-target_include_directories(occt_probe PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-# Box, exact mass properties, and BinTools. TKDESTEP and XDE are not linked.
-target_link_libraries(occt_probe PRIVATE
-  TKernel
-  TKMath
-  TKG2d
-  TKG3d
-  TKGeomBase
-  TKBRep
-  TKGeomAlgo
-  TKTopAlgo
-  TKPrim
-)
+function(fbv_link_occt target)
+  target_include_directories(${target} PRIVATE ${OpenCASCADE_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  # Box, exact mass properties, and BinTools. TKDESTEP and XDE are not linked.
+  target_link_libraries(${target} PRIVATE
+    TKernel
+    TKMath
+    TKG2d
+    TKG3d
+    TKGeomBase
+    TKBRep
+    TKGeomAlgo
+    TKTopAlgo
+    TKPrim
+  )
+endfunction()
+
+add_executable(occt_probe probe.cpp probe_run.cpp)
+fbv_link_occt(occt_probe)
+
+if(ANDROID)
+  add_library(occt_probe_jni SHARED probe_jni.cpp probe_run.cpp)
+  fbv_link_occt(occt_probe_jni)
+endif()

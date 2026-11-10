@@ -11,7 +11,9 @@ sdk=${ANDROID_SDK_ROOT:-/tmp/android-sdk}
 jni=$root/app/src/main/jniLibs/arm64-v8a
 rm -rf "$root/app/src/main/jniLibs"
 mkdir -p "$jni"
+probe_dir=$(CDPATH= cd -- "$(dirname "$probe")" && pwd)
 cp "$probe" "$jni/libocct_probe.so"
+cp "$probe_dir/libocct_probe_jni.so" "$jni/libocct_probe_jni.so"
 cp "$cxx" "$jni/libc++_shared.so"
 for name in TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim; do
   cp "$libdir/lib${name}.so" "$jni/"

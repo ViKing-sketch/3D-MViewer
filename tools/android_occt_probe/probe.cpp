@@ -1,88 +1,56 @@
-// Android OCCT probe. Builds a box, measures its exact volume and area, and
-// writes that shape through BinTools and back. The temporary file is removed.
-// This binary does not read or write a .fbvpkg package.
+// Android OCCT probe executable. The same measurement lives in probe_run.cpp
+// and is also called from the JNI library. This binary does not read or write
+// a .fbvpkg package.
 
-#include <BinTools.hxx>
-#include <BRepGProp.hxx>
-#include <BRepPrimAPI_MakeBox.hxx>
-#include <GProp_GProps.hxx>
-#include <TopoDS_Shape.hxx>
+#include "probe_run.hpp"
 
-#include <chrono>
-#include <cmath>
+#include <csignal>
 #include <cstdio>
-#include <fstream>
-#include <string>
+#include <unistd.h>
 
 namespace {
 
-long hwm_kb() {
-  FILE* file = std::fopen("/proc/self/status", "r");
-  if (file == nullptr) return -1;
-  char line[256];
-  long hwm = -1;
-  while (std::fgets(line, sizeof line, file) != nullptr) {
-    if (std::sscanf(line, "VmHWM: %ld", &hwm) == 1) break;
-  }
-  std::fclose(file);
-  return hwm;
+void on_signal(int sig) {
+  char buf[32];
+  buf[0] = 'm';
+  buf[1] = 'a';
+  buf[2] = 'r';
+  buf[3] = 'k';
+  buf[4] = 'e';
+  buf[5] = 'r';
+  buf[6] = ' ';
+  buf[7] = 's';
+  buf[8] = 'i';
+  buf[9] = 'g';
+  buf[10] = 'n';
+  buf[11] = 'a';
+  buf[12] = 'l';
+  buf[13] = ' ';
+  buf[14] = static_cast<char>('0' + (sig / 10) % 10);
+  buf[15] = static_cast<char>('0' + sig % 10);
+  buf[16] = '\n';
+  const ssize_t wrote = ::write(STDOUT_FILENO, buf, 17);
+  (void)wrote;
+  std::signal(sig, SIG_DFL);
+  raise(sig);
 }
 
-bool near(double value, double expected, double tol) {
-  return std::fabs(value - expected) <= tol;
+// Runs after DT_NEEDED constructors (including OCCT) and before main.
+void exe_init() __attribute__((constructor));
+void exe_init() {
+  static const char line[] = "marker exe_init\n";
+  const ssize_t wrote = ::write(STDOUT_FILENO, line, sizeof line - 1);
+  (void)wrote;
+  std::signal(SIGSEGV, on_signal);
+  std::signal(SIGABRT, on_signal);
+  std::signal(SIGBUS, on_signal);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  const char* path = argc > 1 ? argv[1] : "fbv-occt-box.bin";
-  const auto started = std::chrono::steady_clock::now();
-
-  // 1 m by 2 m by 3 m. Exact volume is 6 m^3. Exact surface area is 22 m^2.
-  const TopoDS_Shape box = BRepPrimAPI_MakeBox(1.0, 2.0, 3.0).Shape();
-  GProp_GProps volume;
-  BRepGProp::VolumeProperties(box, volume);
-  GProp_GProps area;
-  BRepGProp::SurfaceProperties(box, area);
-  if (!near(volume.Mass(), 6.0, 1e-9)) {
-    std::fprintf(stderr, "volume mismatch %.17g\n", volume.Mass());
-    return 2;
-  }
-  if (!near(area.Mass(), 22.0, 1e-7)) {
-    std::fprintf(stderr, "area mismatch %.17g\n", area.Mass());
-    return 3;
-  }
-
-  if (!BinTools::Write(box, path)) {
-    std::fprintf(stderr, "bintools write failed\n");
-    return 4;
-  }
-  std::ifstream in(path, std::ios::binary | std::ios::ate);
-  if (!in) {
-    std::fprintf(stderr, "bintools file missing\n");
-    return 4;
-  }
-  const auto bytes = static_cast<long long>(in.tellg());
-  in.close();
-
-  TopoDS_Shape restored;
-  if (!BinTools::Read(restored, path)) {
-    std::fprintf(stderr, "bintools read failed\n");
-    return 5;
-  }
-  std::remove(path);
-
-  GProp_GProps again;
-  BRepGProp::VolumeProperties(restored, again);
-  if (!near(again.Mass(), 6.0, 1e-9)) {
-    std::fprintf(stderr, "round-trip volume %.17g\n", again.Mass());
-    return 6;
-  }
-
-  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::steady_clock::now() - started);
-  std::printf(
-      "ok volume_m3=6 area_m2=22 bintools_bytes=%lld elapsed_us=%lld rss_hwm_kb=%ld\n",
-      bytes, static_cast<long long>(elapsed.count()), hwm_kb());
-  return 0;
+  const char* brep = argc > 1 ? argv[1] : "fbv-occt-box.bin";
+  const char* trace = argc > 2 ? argv[2] : nullptr;
+  const ProbeResult result = occt_probe_run(brep, trace);
+  return result.code;
 }
