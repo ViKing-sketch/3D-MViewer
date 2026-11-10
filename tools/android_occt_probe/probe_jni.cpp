@@ -24,8 +24,12 @@ Java_com_fieldbim_occtprobe_JniProbeService_nativeRun(JNIEnv* env, jobject, jstr
   return run_probe(env, brep, trace);
 }
 
+// The viewer package is com.fieldbim.field_bim_viewer. JNI encodes each '_' in
+// a class name as "_1", so the exported symbol is field_1bim_1viewer. The
+// unescaped name field_bim_viewer loads the .so and then fails with
+// UnsatisfiedLinkError on the phone.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_fieldbim_field_bim_viewer_OcctProbe_nativeRun(JNIEnv* env, jobject, jstring brep,
-                                                       jstring trace) {
+Java_com_fieldbim_field_1bim_1viewer_OcctProbe_nativeRun(JNIEnv* env, jobject, jstring brep,
+                                                         jstring trace) {
   return run_probe(env, brep, trace);
 }
