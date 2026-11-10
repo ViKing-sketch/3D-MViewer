@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'appearance.dart';
 import 'csv_export.dart';
 import 'filament_channel.dart';
+import 'geometry_method.dart';
 import 'package_import.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
@@ -65,6 +66,7 @@ class _ModelPageState extends State<ModelPage>
   double _fitBottomInset = 0;
   int _fitToken = 0;
   bool _walking = false;
+  GeometryDecision? _geometry;
   int _walkToken = 0;
   WalkPose? _walkPose;
   int _insetTries = 0;
@@ -95,6 +97,7 @@ class _ModelPageState extends State<ModelPage>
       _boxes = session.elementBoxes();
       _specs = session.specifications();
       _remarks = RemarkStore(widget.path)..load();
+      _prepareGeometry(session);
     } catch (error) {
       _error = error.toString();
     }
@@ -135,6 +138,7 @@ class _ModelPageState extends State<ModelPage>
         _specs = session.specifications();
         _remarks = RemarkStore(widget.path)..load();
         _opening = false;
+        _prepareGeometry(session);
       });
     } catch (error) {
       if (_cancel || _left || !mounted) return;
@@ -568,6 +572,45 @@ class _ModelPageState extends State<ModelPage>
     );
   }
 
+  void _prepareGeometry(PackageSession session) {
+    final blocked = meshBeforeOcct(
+      formatVersion: session.formatVersion,
+      rows: session.exactGeometry(),
+      root: session.rootPath,
+      abiSupported: androidArm64(),
+    );
+    if (blocked != null) {
+      _geometry = blocked;
+      debugPrint(blocked.logLine);
+      return;
+    }
+    final file = firstExactFile(session.rootPath, session.exactGeometry());
+    if (file == null) {
+      _geometry = const GeometryDecision(
+        method: GeometryMethod.mesh,
+        reason: 'read',
+      );
+      debugPrint(_geometry!.logLine);
+      return;
+    }
+    unawaited(_readExact(session, file));
+  }
+
+  Future<void> _readExact(PackageSession session, File file) async {
+    final decision = await readExactOrMesh(file);
+    if (!mounted || _session != session) return;
+    setState(() => _geometry = decision);
+  }
+
+  Widget _geometryBanner(S strings) {
+    final decision = _geometry;
+    if (decision == null) return const SizedBox.shrink();
+    return GeometryMethodBanner(
+      decision: decision,
+      label: strings.geometryMethod(decision.method.name, decision.reason),
+    );
+  }
+
   Widget _walkBanner(S strings) {
     final pose = _walkPose;
     final storey = _walkStorey();
@@ -923,6 +966,12 @@ class _ModelPageState extends State<ModelPage>
         Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
         if (_walking)
           Positioned(left: 8, right: 8, top: 46, child: _walkBanner(strings)),
+        Positioned(
+          left: 8,
+          right: 8,
+          top: _walking ? 96 : 46,
+          child: _geometryBanner(strings),
+        ),
         DraggableScrollableSheet(
           controller: _sheet,
           initialChildSize: 0.22,
@@ -974,6 +1023,12 @@ class _ModelPageState extends State<ModelPage>
         Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
         if (_walking)
           Positioned(left: 8, right: 8, top: 46, child: _walkBanner(strings)),
+        Positioned(
+          left: 8,
+          right: 8,
+          top: _walking ? 96 : 46,
+          child: _geometryBanner(strings),
+        ),
       ],
     );
   }

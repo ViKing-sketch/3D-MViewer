@@ -11,6 +11,8 @@ import java.io.File
 class OcctProbe {
     private external fun nativeRun(brep: String, trace: String): String
 
+    private external fun nativeReadBrep(path: String, maxBytes: Int, maxMillis: Int): String
+
     fun run(context: Context): String {
         val info = context.applicationInfo
         val nativeDir = info.nativeLibraryDir
@@ -44,6 +46,17 @@ class OcctProbe {
             header.toString()
         } catch (error: Throwable) {
             header.toString() + "load failed ${error.javaClass.name}: ${error.message}\n"
+        }
+    }
+
+    // Reads one BinTools file already stored in the package. Failure is a
+    // string, not a thrown exception, so the viewer can keep the mesh.
+    fun readBrep(path: String, maxBytes: Int, maxMillis: Int): String {
+        return try {
+            System.loadLibrary("occt_probe_jni")
+            nativeReadBrep(path, maxBytes, maxMillis)
+        } catch (error: Throwable) {
+            "read=fail reason=jni ${error.javaClass.name}: ${error.message}\n"
         }
     }
 }

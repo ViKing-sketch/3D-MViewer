@@ -27,13 +27,21 @@ class MainActivity : FlutterActivity() {
         imported.consume(intent)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fbv/occt")
             .setMethodCallHandler { call, result ->
-                if (call.method != "probe") {
-                    result.notImplemented()
-                    return@setMethodCallHandler
-                }
-                thread {
-                    val text = OcctProbe().run(this)
-                    runOnUiThread { result.success(text) }
+                when (call.method) {
+                    "probe" -> thread {
+                        val text = OcctProbe().run(this)
+                        runOnUiThread { result.success(text) }
+                    }
+                    "readBrep" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        val maxBytes = call.argument<Int>("maxBytes") ?: (32 * 1024 * 1024)
+                        val maxMillis = call.argument<Int>("maxMillis") ?: 2000
+                        thread {
+                            val text = OcctProbe().readBrep(path, maxBytes, maxMillis)
+                            runOnUiThread { result.success(text) }
+                        }
+                    }
+                    else -> result.notImplemented()
                 }
             }
     }
