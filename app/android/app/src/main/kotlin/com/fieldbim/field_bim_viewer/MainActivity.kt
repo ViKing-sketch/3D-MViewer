@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     private var bridge: ImportBridge? = null
@@ -23,6 +25,25 @@ class MainActivity : FlutterActivity() {
         imported.attach()
         bridge = imported
         imported.consume(intent)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fbv/occt")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "probe" -> thread {
+                        val text = OcctProbe().run(this)
+                        runOnUiThread { result.success(text) }
+                    }
+                    "readBrep" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        val maxBytes = call.argument<Int>("maxBytes") ?: (32 * 1024 * 1024)
+                        val maxMillis = call.argument<Int>("maxMillis") ?: 2000
+                        thread {
+                            val text = OcctProbe().readBrep(path, maxBytes, maxMillis)
+                            runOnUiThread { result.success(text) }
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     override fun onNewIntent(intent: Intent) {

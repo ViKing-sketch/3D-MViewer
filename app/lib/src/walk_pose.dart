@@ -17,6 +17,8 @@ const double kWalkClearance = 0.3;
 /// format_version 1 stores these boxes, and `analytic-box-v1` repeats them in
 /// `brep.pack`. The visible mesh is an extrusion or an OCCT triangulation of
 /// the same simplified solid. Neither one is a surface the walk can lean on.
+/// Choosing exact BinTools for the model does not change this: a step still
+/// does not test the mesh or the OCCT shape, so a wall does not stop the walk.
 class ElementBox {
   const ElementBox({
     required this.id,

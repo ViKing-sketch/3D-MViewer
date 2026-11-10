@@ -11,6 +11,7 @@
 * [Очередь приоритетов](docs/priority_plan.md)
 * [Синхронизация fbv-sync-1](docs/sync.md)
 * [Тестовый APK пробы OCCT](docs/occt_probe_apk.md)
+* [Проба OCCT в просмотрщике](docs/viewer_occt.md)
 * [План Filament](docs/rendering.md)
 
 ## Состав репозитория

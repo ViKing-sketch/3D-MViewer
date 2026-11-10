@@ -8,6 +8,7 @@ import 'appearance.dart';
 import 'converter_page.dart';
 import 'model.dart';
 import 'model_page.dart';
+import 'occt_probe.dart';
 import 'package_import.dart';
 import 'package_plan.dart';
 import 'package_session.dart';
@@ -114,6 +115,36 @@ class LibraryPageState extends State<LibraryPage> {
     }
   }
 
+  Future<void> _occtProbe() async {
+    setState(() => _error = widget.strings.occtProbeRunning);
+    try {
+      final text = await OcctProbeChannel.run();
+      if (!mounted) return;
+      setState(() => _error = null);
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(widget.strings.occtProbe),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(text),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(widget.strings.back),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
   Future<void> _import() async {
     try {
       final path = await PackageImport.pick();
@@ -213,6 +244,17 @@ class LibraryPageState extends State<LibraryPage> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(strings.libraryStored),
+              ),
+            ),
+          if (Platform.isAndroid)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.tonal(
+                  onPressed: _occtProbe,
+                  child: Text(strings.occtProbe),
+                ),
               ),
             ),
           Padding(

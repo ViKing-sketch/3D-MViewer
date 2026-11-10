@@ -58,6 +58,12 @@ class S {
   String get dataSourceSqlite => 'sqlite';
   String get back => russian ? 'Назад' : 'Back';
   String get importPackage => russian ? 'Импорт пакета' : 'Import package';
+  String geometryMethod(String method, String reason) => method == 'exact'
+      ? (russian ? 'Геометрия: точная' : 'Geometry: exact')
+      : (russian ? 'Геометрия: меш ($reason)' : 'Geometry: mesh ($reason)');
+
+  String get occtProbe => russian ? 'Проба OCCT' : 'OCCT probe';
+  String get occtProbeRunning => russian ? 'Проба OCCT…' : 'OCCT probe…';
   String get importFailed => russian
       ? 'Не удалось импортировать пакет'
       : 'Could not import the package';

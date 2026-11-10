@@ -26,7 +26,10 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = maxOf(24, flutter.minSdkVersion)
-        targetSdk = flutter.targetSdkVersion
+        // Floor is 34, the level the phone probe passed Play Protect with.
+        // Flutter 3.44's default is 36. The existing GLB unmap reflection is
+        // suppressed on that function so a release build can keep it.
+        targetSdk = 34
         ndk {
             // Emulators used for field checks are x86_64; devices are arm64-v8a.
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -49,6 +52,9 @@ android {
 
     packaging {
         jniLibs {
+            // Extract to nativeLibraryDir so System.loadLibrary finds OCCT next
+            // to libocct_probe_jni.so. Do not copy that binary into filesDir.
+            useLegacyPackaging = true
             // Flutter and Filament both ship this STL. One copy is enough.
             pickFirsts += listOf("**/libc++_shared.so")
             // Filament and sqlite AARs also ship 32-bit libs. The app is arm64 and x86_64 only.

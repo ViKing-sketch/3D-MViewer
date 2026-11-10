@@ -1,5 +1,6 @@
 package com.fieldbim.field_bim_viewer
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Handler
@@ -953,6 +954,7 @@ class FilamentPlatformView(
         }
     }
 
+    @SuppressLint("BlockedPrivateApi")
     private fun unmap(buffer: ByteBuffer) {
         if (buffer !is MappedByteBuffer) return
         try {

@@ -12,7 +12,7 @@
 
 Кнопка «JNI System.loadLibrary» загрузила `libocct_probe_jni.so` в отдельном процессе: `loadLibrary ok`, те же маркеры и `ok volume_m3=6 area_m2=22 bintools_bytes=4494 elapsed_us=1455 rss_hwm_kb=99120`.
 
-OCCT и BinTools на этом arm64 Android 12 работают обоими способами. Предыдущий `exit=139` с пустым stdout был из-за запуска копии из `files/`: тот пакет возвращал код первой попытки и до файла в `nativeLibraryDir` не доходил. В просмотрщик этот замер не встроен, байты BinTools в пакет `.fbvpkg` не пишутся.
+OCCT и BinTools на этом arm64 Android 12 работают обоими способами. Предыдущий `exit=139` с пустым stdout был из-за запуска копии из `files/`: тот пакет возвращал код первой попытки и до файла в `nativeLibraryDir` не доходил. Тот же замер в просмотрщике грузится через `System.loadLibrary` из `nativeLibraryDir`, без копии в `files/`. Просмотрщик `0.1.2` (коммит `66c4e71`) на том же телефоне дал `exit=0`, объём 6 м³, площадь 22 м² и BinTools 4494 байт. Как нажать и что прислать: [viewer_occt.md](viewer_occt.md). Байты BinTools в пакет `.fbvpkg` этим замером не пишутся.
 
 ## Что было не так в первом пакете
 
