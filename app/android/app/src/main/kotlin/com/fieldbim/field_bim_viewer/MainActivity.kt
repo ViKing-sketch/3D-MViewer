@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     private var bridge: ImportBridge? = null
@@ -23,6 +25,17 @@ class MainActivity : FlutterActivity() {
         imported.attach()
         bridge = imported
         imported.consume(intent)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fbv/occt")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "probe") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                thread {
+                    val text = OcctProbe().run(this)
+                    runOnUiThread { result.success(text) }
+                }
+            }
     }
 
     override fun onNewIntent(intent: Intent) {
