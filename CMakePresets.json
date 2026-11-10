@@ -1,0 +1,140 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "linux-gcc",
+      "displayName": "Linux GCC Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux GCC Release",
+      "inherits": "linux-gcc",
+      "binaryDir": "${sourceDir}/build/linux-gcc-release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "linux-gcc-ifcopenshell",
+      "displayName": "Linux GCC Release with IfcOpenShell",
+      "inherits": "linux-gcc-release",
+      "binaryDir": "${sourceDir}/build/linux-gcc-ifcopenshell",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FBV_WITH_IFCOPENSHELL": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-ifcopenshell",
+      "displayName": "Windows MSVC 2022 with IfcOpenShell",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-ifcopenshell",
+      "cacheVariables": { "FBV_WITH_IFCOPENSHELL": "ON" }
+    },
+    {
+      "name": "windows-vs2026",
+      "displayName": "Windows Visual Studio 2026 (MSVC 19.50) with IfcOpenShell",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-vs2026",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "FBV_WITH_IFCOPENSHELL": "ON" }
+    },
+    {
+      "name": "windows-mingw",
+      "displayName": "Windows MinGW (MSYS2 UCRT64 or MinGW64)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-mingw",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "android-arm64",
+      "displayName": "Android arm64-v8a (NDK)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/android-arm64",
+      "toolchainFile": "${sourceDir}/deps/toolchains/android-arm64.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "ios",
+      "displayName": "iOS arm64 (macOS, task Z20)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ios",
+      "toolchainFile": "${sourceDir}/deps/toolchains/ios.cmake",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-gcc", "configurePreset": "linux-gcc" },
+    { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" },
+    { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "linux-gcc-ifcopenshell", "configurePreset": "linux-gcc-ifcopenshell" },
+    { "name": "windows-msvc-ifcopenshell", "configurePreset": "windows-msvc-ifcopenshell", "configuration": "Release" },
+    { "name": "windows-vs2026", "configurePreset": "windows-vs2026", "configuration": "Release" },
+    { "name": "windows-mingw", "configurePreset": "windows-mingw" },
+    { "name": "android-arm64", "configurePreset": "android-arm64" },
+    { "name": "ios", "configurePreset": "ios" }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-gcc",
+      "configurePreset": "linux-gcc",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-gcc-release",
+      "configurePreset": "linux-gcc-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-msvc",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-gcc-ifcopenshell",
+      "configurePreset": "linux-gcc-ifcopenshell",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-msvc-ifcopenshell",
+      "configurePreset": "windows-msvc-ifcopenshell",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-vs2026",
+      "configurePreset": "windows-vs2026",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-mingw",
+      "configurePreset": "windows-mingw",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+third_party/sqlite/** linguist-vendored
+*.ifc text eol=lf
+*.md text eol=lf
+*.hpp text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.patch text eol=lf

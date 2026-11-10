@@ -1,0 +1,646 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+import 'package:sqlite3/sqlite3.dart';
+
+import 'fts_query.dart';
+import 'model.dart';
+import 'walk_pose.dart';
+import 'sqlite_setup.dart';
+import 'text_bytes.dart';
+import 'zip_store.dart';
+
+class PackageException implements Exception {
+  PackageException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+class PackageSession {
+  PackageSession._(
+    this.summary,
+    this._db,
+    this._temp,
+    this.manifest,
+    this.rootPath,
+    this.formatVersion,
+  );
+
+  final PackageSummary summary;
+  final Database _db;
+  final Directory? _temp;
+  final Map<String, dynamic> manifest;
+
+  /// `manifest.format_version`. Versions 1 through 4 open. 1 has no system or tile tables.
+  final int formatVersion;
+
+  /// Directory that contains `manifest.json` and `mesh/`. For a zip package this
+  /// is the streamed extract, not the archive itself.
+  final String rootPath;
+
+  static PackageSession openPath(String path) {
+    configureSqlite();
+    final entity = FileSystemEntity.typeSync(path);
+    if (entity == FileSystemEntityType.directory) {
+      return _openDirectory(path, deleteOnClose: null, isZip: false);
+    }
+    if (entity == FileSystemEntityType.file) {
+      final temp = Directory.systemTemp.createTempSync('fbvpkg-');
+      try {
+        final hashes = ZipStore.extract(File(path), temp);
+        return _openDirectory(
+          temp.path,
+          deleteOnClose: temp,
+          isZip: true,
+          displayPath: path,
+          hashes: hashes,
+        );
+      } on ZipStoreException catch (error) {
+        temp.deleteSync(recursive: true);
+        throw PackageException(error.message);
+      } catch (_) {
+        temp.deleteSync(recursive: true);
+        rethrow;
+      }
+    }
+    throw PackageException('Путь не найден: $path');
+  }
+
+  /// Zip packages are unpacked on a background isolate. A directory is opened
+  /// on the caller, same as [openPath].
+  static Future<PackageSession> openPathAsync(
+    String path, {
+    void Function(int done, int total)? onProgress,
+    void Function(void Function() cancel)? onCancel,
+    bool Function()? isCancelled,
+  }) async {
+    configureSqlite();
+    final entity = FileSystemEntity.typeSync(path);
+    if (entity == FileSystemEntityType.directory) {
+      return _openDirectory(path, deleteOnClose: null, isZip: false);
+    }
+    if (entity == FileSystemEntityType.file) {
+      final temp = Directory.systemTemp.createTempSync('fbvpkg-');
+      try {
+        final hashes = await ZipStore.extractAsync(
+          File(path),
+          temp,
+          onProgress: onProgress,
+          onCancel: onCancel,
+        );
+        await Future<void>.delayed(Duration.zero);
+        if (isCancelled?.call() == true) {
+          throw PackageException('cancelled');
+        }
+        final session = _openDirectory(
+          temp.path,
+          deleteOnClose: temp,
+          isZip: true,
+          displayPath: path,
+          hashes: hashes,
+        );
+        await Future<void>.delayed(Duration.zero);
+        if (isCancelled?.call() == true) {
+          session.close();
+          throw PackageException('cancelled');
+        }
+        return session;
+      } on ZipStoreException catch (error) {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+        throw PackageException(error.message);
+      } catch (_) {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+        rethrow;
+      }
+    }
+    throw PackageException('Путь не найден: $path');
+  }
+
+  static PackageSession _openDirectory(
+    String directory, {
+    required Directory? deleteOnClose,
+    required bool isZip,
+    String? displayPath,
+    bool verifyParts = true,
+    Map<String, String>? hashes,
+  }) {
+    final root = Directory(directory);
+    final manifestFile = File(p.join(root.path, 'manifest.json'));
+    if (!manifestFile.existsSync()) {
+      throw PackageException('В пакете нет manifest.json');
+    }
+    final manifest =
+        jsonDecode(decodePackageBytes(manifestFile.readAsBytesSync()))
+            as Map<String, dynamic>;
+    final version = manifest['format_version'];
+    if (version is! int || version < 1 || version > 4) {
+      throw PackageException('Неподдерживаемая format_version: $version');
+    }
+    if (verifyParts) _verifyParts(root, manifest, hashes);
+    final db = sqlite3.open(
+      p.join(root.path, 'meta.sqlite'),
+      mode: OpenMode.readOnly,
+    );
+    final meta = db.select(
+      "SELECT value FROM schema_meta WHERE key = 'format_version'",
+    );
+    final stored = meta.isEmpty ? '' : meta.first.columnAt(0).toString();
+    if (stored != '$version') {
+      db.dispose();
+      throw PackageException(
+        'schema_meta format_version не совпал с manifest: $stored',
+      );
+    }
+    if (version >= 2 &&
+        (!_tableExists(db, 'systems') ||
+            !_tableExists(db, 'system_elements'))) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы systems',
+      );
+    }
+    if (version >= 3 &&
+        (!_tableExists(db, 'tiles') || !_tableExists(db, 'tile_elements'))) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы tiles',
+      );
+    }
+    if (version >= 4 && !_tableExists(db, 'exact_geometry')) {
+      db.dispose();
+      throw PackageException(
+        'В пакете format_version $version нет таблицы exact_geometry',
+      );
+    }
+    final count =
+        db.select('SELECT COUNT(*) AS n FROM elements').first['n'] as int;
+    final source = (manifest['source'] as Map?) ?? const {};
+    final bytes = _partBytes(manifest);
+    final storedAt = displayPath ?? root.path;
+    return PackageSession._(
+      PackageSummary(
+        path: storedAt,
+        name: (manifest['name'] as String?) ?? p.basename(storedAt),
+        schema: (source['schema'] as String?) ?? '',
+        elementCount: count,
+        bytes: bytes,
+        isZip: isZip,
+        createdUtc: packageCreated(manifest, storedAt),
+        plan: _planBoxes(db),
+      ),
+      db,
+      deleteOnClose,
+      manifest,
+      root.path,
+      version,
+    );
+  }
+
+  static bool _tableExists(Database db, String name) {
+    final rows = db.select(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+      [name],
+    );
+    return rows.isNotEmpty;
+  }
+
+  static void _verifyParts(
+    Directory root,
+    Map<String, dynamic> manifest,
+    Map<String, String>? hashes,
+  ) {
+    final parts = manifest['parts'];
+    if (parts is! Map) throw PackageException('manifest.parts отсутствует');
+    for (final entry in parts.entries) {
+      final name = entry.key.toString().replaceAll('\\', '/');
+      final file = File(p.joinAll([root.path, ...name.split('/')]));
+      if (!file.existsSync()) {
+        throw PackageException('Нет части пакета ${entry.key}');
+      }
+      final meta = entry.value;
+      if (meta is! Map) continue;
+      final expected = meta['sha256']?.toString() ?? '';
+      if (expected.isEmpty) continue;
+      final actual = hashes?[name] ?? ZipStore.hashFile(file);
+      if (actual != expected) {
+        throw PackageException('Хэш не совпал: ${entry.key}');
+      }
+    }
+  }
+
+  static int _partBytes(Map<String, dynamic> manifest) {
+    final parts = manifest['parts'];
+    if (parts is! Map) return 0;
+    var sum = 0;
+    for (final value in parts.values) {
+      if (value is Map && value['bytes'] is num) {
+        sum += (value['bytes'] as num).toInt();
+      }
+    }
+    return sum;
+  }
+
+  List<SpatialNode> spatial() {
+    final rows = _db.select(
+      'SELECT id, parent_id, CAST(kind AS BLOB), CAST(COALESCE(name, \'\') AS BLOB), elevation FROM spatial ORDER BY id',
+    );
+    return [
+      for (final row in rows)
+        SpatialNode(
+          id: row.columnAt(0) as int,
+          parentId: row.columnAt(1) as int? ?? 0,
+          kind: packageText(row.columnAt(2)),
+          name: packageText(row.columnAt(3)),
+          hasElevation: row.columnAt(4) != null,
+          elevation: (row.columnAt(4) as num?)?.toDouble() ?? 0,
+        ),
+    ];
+  }
+
+  /// Element ids whose FTS row matches [query].
+  ///
+  /// The index covers name, tag, GlobalId, type name, and property text.
+  /// An empty query returns no ids; the caller treats that as "no search".
+  /// A MATCH the tokenizer rejects also returns no ids.
+  List<int> searchIds(String query) {
+    final match = ftsMatchExpression(query);
+    if (match == null) return const [];
+    try {
+      final rows = _db.select(
+        'SELECT element_id FROM fts_elements WHERE fts_elements MATCH ?1 ORDER BY element_id',
+        [match],
+      );
+      return [for (final row in rows) row.columnAt(0) as int];
+    } on SqliteException {
+      return const [];
+    }
+  }
+
+  List<ElementInfo> elements() {
+    final rows = _db.select('''
+SELECT e.id, COALESCE(e.parent_id, 0), COALESCE(e.storey_id, 0), CAST(e.ifc_class AS BLOB),
+       CAST(COALESCE(e.name, '') AS BLOB), CAST(COALESCE(e.tag, '') AS BLOB),
+       CAST(COALESCE(t.name, '') AS BLOB),
+       CAST(COALESCE((SELECT m.name FROM material_layers ml
+                 JOIN materials m ON m.id = ml.material_id
+                 WHERE ml.set_id = e.material_set_id
+                 ORDER BY ml.layer_order LIMIT 1), '') AS BLOB),
+       CAST(e.guid AS BLOB)
+FROM elements e
+LEFT JOIN types t ON t.id = e.type_id
+ORDER BY e.id
+''');
+    final members = _systemMembers();
+    return [
+      for (final row in rows)
+        ElementInfo(
+          id: row.columnAt(0) as int,
+          parentId: row.columnAt(1) as int,
+          storeyId: row.columnAt(2) as int,
+          ifcClass: packageText(row.columnAt(3)),
+          name: packageText(row.columnAt(4)),
+          tag: packageText(row.columnAt(5)),
+          typeName: packageText(row.columnAt(6)),
+          material: packageText(row.columnAt(7)),
+          guid: packageText(row.columnAt(8)),
+          systemIds: members[row.columnAt(0) as int] ?? const [],
+        ),
+    ];
+  }
+
+  /// Storey × discipline tiles. Versions 1 and 2 have none; that is not an error.
+  /// An empty [TileInfo.discipline] is the bucket for elements with no category.
+  /// A null [TileInfo.storeyId] is the bucket for elements with no storey.
+  List<TileInfo> tiles() {
+    if (formatVersion < 3) return const [];
+    final rows = _db.select('''
+SELECT id, storey_id, CAST(discipline AS BLOB), element_count
+FROM tiles
+ORDER BY id
+''');
+    return [
+      for (final row in rows)
+        TileInfo(
+          id: row.columnAt(0) as int,
+          storeyId: row.columnAt(1) as int?,
+          discipline: packageText(row.columnAt(2)),
+          elementCount: row.columnAt(3) as int,
+          elementIds: _tileMembers(row.columnAt(0) as int),
+        ),
+    ];
+  }
+
+  List<int> _tileMembers(int tileId) {
+    final rows = _db.select(
+      'SELECT element_id FROM tile_elements WHERE tile_id = ?1 ORDER BY element_id',
+      [tileId],
+    );
+    return [for (final row in rows) row.columnAt(0) as int];
+  }
+
+  /// Optional BinTools files. Versions 1–3 have none; that is not an error.
+  /// An empty list means this package has no exact geometry. `brep.pack` is
+  /// not this list.
+  List<ExactGeometry> exactGeometry() {
+    if (formatVersion < 4) return const [];
+    final rows = _db.select(
+      'SELECT element_id, CAST(path AS BLOB), bytes FROM exact_geometry ORDER BY element_id',
+    );
+    return [
+      for (final row in rows)
+        ExactGeometry(
+          elementId: row.columnAt(0) as int,
+          path: packageText(row.columnAt(1)),
+          bytes: row.columnAt(2) as int,
+        ),
+    ];
+  }
+
+  /// Engineering systems. A format_version 1 package has none; that is not an error.
+  List<SystemInfo> systems() {
+    if (formatVersion < 2) return const [];
+    final rows = _db.select('''
+SELECT id, CAST(COALESCE(name, '') AS BLOB), CAST(ifc_class AS BLOB),
+       CAST(COALESCE(guid, '') AS BLOB)
+FROM systems
+ORDER BY id
+''');
+    return [
+      for (final row in rows)
+        SystemInfo(
+          id: row.columnAt(0) as int,
+          name: packageText(row.columnAt(1)),
+          ifcClass: packageText(row.columnAt(2)),
+          guid: packageText(row.columnAt(3)),
+        ),
+    ];
+  }
+
+  Map<int, List<int>> _systemMembers() {
+    if (formatVersion < 2) return const {};
+    final rows = _db.select(
+      'SELECT element_id, system_id FROM system_elements ORDER BY system_id, element_id',
+    );
+    final members = <int, List<int>>{};
+    for (final row in rows) {
+      final elementId = row.columnAt(0) as int;
+      members.putIfAbsent(elementId, () => <int>[]).add(row.columnAt(1) as int);
+    }
+    return members;
+  }
+
+  /// World-metre boxes. A null box is omitted. A zero box is kept so the
+  /// walker can ignore an element that has no extent.
+  List<ElementBox> elementBoxes() {
+    final rows = _db.select('''
+SELECT id, COALESCE(storey_id, 0), CAST(ifc_class AS BLOB),
+       bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z
+FROM elements
+ORDER BY id
+''');
+    final boxes = <ElementBox>[];
+    for (final row in rows) {
+      final minX = row.columnAt(3);
+      final minY = row.columnAt(4);
+      final minZ = row.columnAt(5);
+      final maxX = row.columnAt(6);
+      final maxY = row.columnAt(7);
+      final maxZ = row.columnAt(8);
+      if (minX == null ||
+          minY == null ||
+          minZ == null ||
+          maxX == null ||
+          maxY == null ||
+          maxZ == null) {
+        continue;
+      }
+      boxes.add(
+        ElementBox(
+          id: row.columnAt(0) as int,
+          storeyId: row.columnAt(1) as int,
+          ifcClass: packageText(row.columnAt(2)),
+          minX: (minX as num).toDouble(),
+          minY: (minY as num).toDouble(),
+          minZ: (minZ as num).toDouble(),
+          maxX: (maxX as num).toDouble(),
+          maxY: (maxY as num).toDouble(),
+          maxZ: (maxZ as num).toDouble(),
+        ),
+      );
+    }
+    return boxes;
+  }
+
+  List<PropInfo> props(int elementId) {
+    final rows = _db.select(
+      '''
+SELECT CAST(p.name AS BLOB), CAST(pr.name AS BLOB), CAST(COALESCE(pr.value_text, '') AS BLOB), CAST(p.source AS BLOB)
+FROM psets p
+JOIN props pr ON pr.pset_id = p.id
+WHERE p.element_id = ?1
+   OR p.type_id = (SELECT type_id FROM elements WHERE id = ?1)
+ORDER BY p.id, pr.id
+''',
+      [elementId],
+    );
+    return [
+      for (final row in rows)
+        PropInfo(
+          pset: packageText(row.columnAt(0)),
+          name: packageText(row.columnAt(1)),
+          valueText: packageText(row.columnAt(2)),
+          source: packageText(row.columnAt(3)),
+        ),
+    ];
+  }
+
+  List<QuantityInfo> quantities(int elementId) {
+    final rows = _db.select(
+      '''
+SELECT CAST(COALESCE(qset, '') AS BLOB), CAST(name AS BLOB), CAST(kind AS BLOB), CAST(COALESCE(unit, '') AS BLOB), value
+FROM quantities WHERE element_id = ? ORDER BY id
+''',
+      [elementId],
+    );
+    return [
+      for (final row in rows)
+        QuantityInfo(
+          qset: packageText(row.columnAt(0)),
+          name: packageText(row.columnAt(1)),
+          kind: packageText(row.columnAt(2)),
+          unit: packageText(row.columnAt(3)),
+          value: (row.columnAt(4) as num).toDouble(),
+        ),
+    ];
+  }
+
+  List<ClassInfo> classes(int elementId) {
+    final rows = _db.select(
+      '''
+SELECT CAST(COALESCE(system, '') AS BLOB), CAST(COALESCE(code, '') AS BLOB), CAST(COALESCE(title, '') AS BLOB)
+FROM classification WHERE element_id = ? ORDER BY id
+''',
+      [elementId],
+    );
+    return [
+      for (final row in rows)
+        ClassInfo(
+          system: packageText(row.columnAt(0)),
+          code: packageText(row.columnAt(1)),
+          title: packageText(row.columnAt(2)),
+        ),
+    ];
+  }
+
+  List<SpecRow> specifications() {
+    final rows = _db.select('''
+SELECT CAST(COALESCE(sp.name, '') AS BLOB), CAST(COALESCE(s.ifc_class, '') AS BLOB),
+       CAST(COALESCE(s.type_name, '') AS BLOB), CAST(COALESCE(s.material_name, '') AS BLOB),
+       s.element_count, CAST(s.quantity_kind AS BLOB), s.quantity_sum
+FROM spec_views s
+LEFT JOIN spatial sp ON sp.id = s.storey_id
+ORDER BY s.id
+''');
+    return [
+      for (final row in rows)
+        SpecRow(
+          storeyName: packageText(row.columnAt(0)),
+          ifcClass: packageText(row.columnAt(1)),
+          typeName: packageText(row.columnAt(2)),
+          material: packageText(row.columnAt(3)),
+          elementCount: row.columnAt(4) as int,
+          quantityKind: packageText(row.columnAt(5)),
+          quantitySum: (row.columnAt(6) as num?)?.toDouble(),
+        ),
+    ];
+  }
+
+  var _closed = false;
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _db.dispose();
+    final temp = _temp;
+    if (temp != null && temp.existsSync()) {
+      temp.deleteSync(recursive: true);
+    }
+  }
+}
+
+/// Manifest creation time, else the package file or folder modification time.
+DateTime? packageCreated(Map<String, dynamic> manifest, String path) {
+  final raw = manifest['created_utc'];
+  if (raw is String && raw.isNotEmpty) {
+    final parsed = DateTime.tryParse(raw);
+    if (parsed != null) return parsed.toUtc();
+  }
+  try {
+    final type = FileSystemEntity.typeSync(path);
+    if (type == FileSystemEntityType.file) {
+      return File(path).lastModifiedSync().toUtc();
+    }
+    if (type == FileSystemEntityType.directory) {
+      return Directory(path).statSync().modified.toUtc();
+    }
+  } catch (_) {}
+  return null;
+}
+
+List<PlanBox> _planBoxes(Database db) {
+  final rows = db.select('''
+SELECT bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y, color_r, color_g, color_b
+FROM elements
+ORDER BY id
+''');
+  final boxes = <PlanBox>[];
+  for (final row in rows) {
+    final minX = row.columnAt(0);
+    final minY = row.columnAt(1);
+    final maxX = row.columnAt(2);
+    final maxY = row.columnAt(3);
+    if (minX is! num || minY is! num || maxX is! num || maxY is! num) continue;
+    if ((maxX - minX).abs() < 1e-6 || (maxY - minY).abs() < 1e-6) continue;
+    boxes.add(
+      PlanBox(
+        minX: minX.toDouble(),
+        minY: minY.toDouble(),
+        maxX: maxX.toDouble(),
+        maxY: maxY.toDouble(),
+        red: _unit(row.columnAt(4)),
+        green: _unit(row.columnAt(5)),
+        blue: _unit(row.columnAt(6)),
+      ),
+    );
+  }
+  return boxes;
+}
+
+double _unit(Object? value) {
+  if (value is! num) return 0.6;
+  final number = value.toDouble();
+  if (number < 0) return 0;
+  if (number > 1) return 1;
+  return number;
+}
+
+List<PackageSummary> scanLibrary(String directory) {
+  configureSqlite();
+  final root = Directory(directory);
+  if (!root.existsSync()) return const [];
+  final found = <PackageSummary>[];
+  for (final entity in root.listSync(followLinks: false)) {
+    if (entity is Directory &&
+        File(p.join(entity.path, 'manifest.json')).existsSync()) {
+      try {
+        final session = PackageSession._openDirectory(
+          entity.path,
+          deleteOnClose: null,
+          isZip: false,
+          verifyParts: false,
+        );
+        found.add(session.summary);
+        session.close();
+      } on PackageException {
+        continue;
+      }
+    } else if (entity is File &&
+        entity.path.toLowerCase().endsWith('.fbvpkg')) {
+      Directory? temp;
+      try {
+        temp = Directory.systemTemp.createTempSync('fbvscan-');
+        // Listing a library must not unpack meshes. Integrity is checked on open.
+        ZipStore.extract(
+          entity,
+          temp,
+          only: const {'manifest.json', 'meta.sqlite'},
+        );
+        final session = PackageSession._openDirectory(
+          temp.path,
+          deleteOnClose: temp,
+          isZip: true,
+          displayPath: entity.path,
+          verifyParts: false,
+        );
+        found.add(session.summary);
+        session.close();
+        temp = null;
+      } catch (_) {
+        temp?.deleteSync(recursive: true);
+      }
+    }
+  }
+  found.sort((a, b) => a.name.compareTo(b.name));
+  return found;
+}
+
+void deletePackage(String path) {
+  final type = FileSystemEntity.typeSync(path);
+  if (type == FileSystemEntityType.directory) {
+    Directory(path).deleteSync(recursive: true);
+  } else if (type == FileSystemEntityType.file) {
+    File(path).deleteSync();
+  }
+}

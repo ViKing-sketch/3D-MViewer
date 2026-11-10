@@ -1,0 +1,75 @@
+// Section clip for Filament 1.77.3. Rebuild both materials with:
+//   matc -p mobile -a opengl -a vulkan -l 1 -o ../assets/materials/section.filamat section.mat
+//   matc -p mobile -a opengl -a vulkan -l 1 -o ../assets/materials/section_ghost.filamat section_ghost.mat
+//
+// Keep a fragment when dot(point, clipPlane.xyz) <= clipPlane.w.
+// boxMin.w > 0.5 also discards outside (boxMin.xyz, boxMax.xyz).
+// The plane is in API metres (Y-up). Filament shifts getWorldPosition() to the
+// camera, so the test uses getUserWorldPosition() only. frontSign is +1 for
+// outward winding and -1 for inward winding. The exterior stays lit. The cut
+// is a solid cap.
+material {
+    name : SectionClip,
+    shadingModel : lit,
+    culling : none,
+    doubleSided : true,
+    postLightingBlending : transparent,
+    parameters : [
+        { type : float4, name : baseColor, precision : high },
+        { type : float4, name : capColor, precision : high },
+        { type : float4, name : clipPlane, precision : high },
+        { type : float4, name : boxMin, precision : high },
+        { type : float4, name : boxMax, precision : high },
+        { type : float, name : roughness },
+        { type : float, name : frontSign }
+    ],
+    requires : [
+        tangents
+    ]
+}
+
+fragment {
+    bool sectionOut(vec3 p, vec4 plane) {
+        if (dot(p, plane.xyz) > plane.w) {
+            return true;
+        }
+        if (materialParams.boxMin.w <= 0.5) {
+            return false;
+        }
+        vec3 lo = materialParams.boxMin.xyz;
+        vec3 hi = materialParams.boxMax.xyz;
+        return p.x < lo.x || p.y < lo.y || p.z < lo.z ||
+                p.x > hi.x || p.y > hi.y || p.z > hi.z;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 plane = materialParams.clipPlane;
+        if (sectionOut(getUserWorldPosition(), plane)) {
+            discard;
+        }
+        // Filament flips the geometric normal toward the camera on a back
+        // face. Undo that, then undo an inward mesh, so the exterior is the
+        // side that faces the eye.
+        vec3 geometric = getWorldGeometricNormalVector();
+        if (!gl_FrontFacing) {
+            geometric = -geometric;
+        }
+        if (materialParams.frontSign < 0.0) {
+            geometric = -geometric;
+        }
+        bool facesCamera = dot(geometric, getWorldViewVector()) > 0.0;
+        vec4 tint = materialParams.baseColor;
+        vec3 cap = materialParams.capColor.rgb;
+        material.roughness = materialParams.roughness;
+        material.metallic = 0.0;
+        material.reflectance = 0.35;
+        if (facesCamera) {
+            material.baseColor = vec4(tint.rgb * tint.a, tint.a);
+            material.postLightingColor = vec4(0.0);
+        } else {
+            material.baseColor = vec4(cap, 1.0);
+            material.postLightingColor = vec4(cap, 1.0);
+        }
+    }
+}

@@ -1,0 +1,56 @@
+cmake_minimum_required(VERSION 3.21)
+project(field_bim_viewer VERSION 0.1.0 LANGUAGES C CXX)
+
+# OCCT 7.8.1 and other vendored projects still call cmake_minimum_required() below 3.5.
+# CMake 4 rejects that unless this floor is set. The OCCT superbuild also passes it
+# on its own command line; the environment covers any nested cmake it launches.
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM OR CMAKE_POLICY_VERSION_MINIMUM VERSION_LESS 3.5)
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING
+      "Minimum CMake policy version for bundled third-party projects" FORCE)
+endif()
+set(ENV{CMAKE_POLICY_VERSION_MINIMUM} "${CMAKE_POLICY_VERSION_MINIMUM}")
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+option(FBV_BUILD_TESTS "Build unit tests" ON)
+option(FBV_WITH_OCCT "Build Open CASCADE 7.8.1 (turns on IfcOpenShell)" OFF)
+option(FBV_WITH_IFCOPENSHELL "Mesh IFC with IfcOpenShell's Open CASCADE kernel" OFF)
+set(FBV_SUPERBUILD_JOBS "" CACHE STRING
+    "Parallel compile jobs for the Open CASCADE superbuild (empty = all cores)")
+
+if(FBV_BUILD_TESTS)
+  enable_testing()
+endif()
+
+if(FBV_WITH_OCCT AND NOT FBV_WITH_IFCOPENSHELL)
+  set(FBV_WITH_IFCOPENSHELL ON)
+endif()
+
+function(fbv_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /utf-8 /permissive-)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  endif()
+endfunction()
+
+# Windows loads fbv_core.dll from the directory of the executable.
+function(fbv_copy_core_dll target)
+  if(WIN32)
+    add_custom_command(
+      TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fbv_core>
+              $<TARGET_FILE_DIR:${target}>
+      VERBATIM)
+  endif()
+endfunction()
+
+add_subdirectory(third_party/sqlite)
+add_subdirectory(deps)
+add_subdirectory(core)
+add_subdirectory(converter)
