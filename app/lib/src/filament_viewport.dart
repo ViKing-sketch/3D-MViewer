@@ -56,7 +56,8 @@ class FilamentViewport extends StatefulWidget {
   /// Orbit, or a first-person pose on one storey.
   final WalkCommand walk;
 
-  /// Fraction of this view covered from the bottom, measured from the sheet.
+  /// Fraction of this view covered from the bottom. The portrait sheet does
+  /// not set this: the sheet is an overlay and the surface stays full size.
   final double bottomInset;
   final ValueChanged<int?>? onPick;
   final ValueChanged<String>? onStatus;
