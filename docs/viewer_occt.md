@@ -26,7 +26,7 @@
 
 ## Что нажать
 
-1. Удалите просмотрщик `0.1.1`, если он установлен. Поставьте arm64 APK `tools/viewer_apk/field-bim-viewer-arm64.apk` (`0.1.2`, `targetSdk` 34).
+1. Удалите просмотрщик `0.1.1` или `0.1.2`, если он установлен. Поставьте arm64 APK `tools/viewer_apk/field-bim-viewer-arm64.apk` (`0.1.3`, `targetSdk` 34). Тот же файл: `tools/viewer_apk/field-bim-viewer-0.1.3-arm64.apk`.
 2. Откройте Field BIM Viewer.
 3. На экране моделей нажмите «Проба OCCT».
 4. Дождитесь текста в окне. Его можно выделить.
