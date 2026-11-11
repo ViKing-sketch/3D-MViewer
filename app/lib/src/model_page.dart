@@ -279,7 +279,7 @@ class _ModelPageState extends State<ModelPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (forced != null) {
-        _pushFitInset(forced);
+        _pushFitInset(forced, 0);
         return;
       }
       _syncFitInset();
@@ -299,12 +299,18 @@ class _ModelPageState extends State<ModelPage>
     _insetTries = 0;
     final sheet = _sheet.isAttached ? _sheet.size : 0.22;
     final overlap = (sheet * stack).clamp(0.0, stack);
-    _pushFitInset(overlap / stack);
+    _pushFitInset(overlap / stack, stack);
   }
 
-  void _pushFitInset(double inset) {
+  /// [stackPx] is the portrait stack height. The gate is one logical pixel so
+  /// the last snap, often only a few thousandths of the height, still reaches
+  /// the native viewport. A 0.015 gate left that strip undrawn, and the
+  /// SurfaceView flashed black there after the finger went up.
+  void _pushFitInset(double inset, double stackPx) {
     final next = inset.clamp(0.0, 0.72);
-    if ((next - _fitBottomInset).abs() < 0.015) return;
+    if (next == _fitBottomInset) return;
+    final gate = stackPx > 1 ? 1.0 / stackPx : 0.0;
+    if ((next - _fitBottomInset).abs() < gate) return;
     setState(() => _fitBottomInset = next);
   }
 

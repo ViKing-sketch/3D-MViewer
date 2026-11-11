@@ -98,6 +98,8 @@ class FilamentPlatformView(
     private lateinit var renderer: Renderer
     private lateinit var scene: Scene
     private lateinit var view: View
+    private var letterboxView: View? = null
+    private var letterboxScene: Scene? = null
     private lateinit var camera: Camera
     private lateinit var assetLoader: AssetLoader
     private lateinit var resourceLoader: ResourceLoader
@@ -265,6 +267,11 @@ class FilamentPlatformView(
         engine = Engine.Builder().config(config).build()
         engineAlive = true
         renderer = engine.createRenderer()
+        renderer.clearOptions = Renderer.ClearOptions().apply {
+            setClearColor(0.83, 0.87, 0.91, 1.0)
+            clear = true
+            discard = false
+        }
         scene = engine.createScene()
         camera = engine.createCamera(EntityManager.get().create())
         camera.setExposure(16f, 1f / 125f, 100f)
@@ -299,6 +306,18 @@ class FilamentPlatformView(
         scene.indirectLight = indirect
         skybox = Skybox.Builder().color(0.83f, 0.87f, 0.91f, 1f).build(engine)
         scene.skybox = skybox
+        // The scene viewport stops at the sheet. Pixels below it are not drawn
+        // by [view], and an uncleared SurfaceView buffer flashes black there
+        // whenever the sheet and the inset disagree by a few pixels.
+        val letterScene = engine.createScene()
+        letterScene.skybox = skybox
+        val letterView = engine.createView()
+        letterView.scene = letterScene
+        letterView.camera = camera
+        letterView.isPostProcessingEnabled = false
+        letterView.antiAliasing = View.AntiAliasing.NONE
+        letterboxScene = letterScene
+        letterboxView = letterView
         xrayInstance = loadXray()
         loadSection()
     }
@@ -364,7 +383,7 @@ class FilamentPlatformView(
                 renderHandler.post {
                     if (destroyed) return@post
                     val next = bottom.coerceIn(0.0, 0.72)
-                    if (kotlin.math.abs(next - fitBottomInset) < 0.015) return@post
+                    if (!FitInset.changed(fitBottomInset, next, viewportH)) return@post
                     fitBottomInset = next
                     applyViewViewport()
                     if (walkMode) {
@@ -1196,6 +1215,7 @@ class FilamentPlatformView(
         pumpQueue()
         logUploadHeartbeat(frameTimeNanos)
         if (renderer.beginFrame(swapChain!!, frameTimeNanos)) {
+            paintLetterbox()
             renderer.render(view)
             renderer.endFrame()
         }
@@ -1455,6 +1475,15 @@ class FilamentPlatformView(
         if (!engineAlive) return
         val height = visibleHeight()
         view.viewport = Viewport(0, viewportH - height, viewportW.coerceAtLeast(1), height)
+    }
+
+    private fun paintLetterbox() {
+        val letter = letterboxView ?: return
+        val fullW = viewportW.coerceAtLeast(1)
+        val fullH = viewportH.coerceAtLeast(1)
+        if (visibleHeight() >= fullH) return
+        letter.viewport = Viewport(0, 0, fullW, fullH)
+        renderer.render(letter)
     }
 
     private fun allBox(): FloatArray? {
@@ -2091,6 +2120,7 @@ class FilamentPlatformView(
         step("lights") {
             scene.indirectLight = null
             scene.skybox = null
+            letterboxScene?.skybox = null
             engine.destroyIndirectLight(indirect)
             engine.destroySkybox(skybox)
             engine.destroyEntity(sun)
@@ -2107,6 +2137,10 @@ class FilamentPlatformView(
             swapChain = null
             engine.destroyRenderer(renderer)
             engine.destroyView(view)
+            letterboxView?.let { engine.destroyView(it) }
+            letterboxView = null
+            letterboxScene?.let { engine.destroyScene(it) }
+            letterboxScene = null
             engine.destroyScene(scene)
             engine.destroyCameraComponent(camera.entity)
             EntityManager.get().destroy(camera.entity)
