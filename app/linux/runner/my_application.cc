@@ -1,5 +1,8 @@
 #include "my_application.h"
 
+#include <limits.h>
+#include <unistd.h>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -14,6 +17,31 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// The bundle installs app_icon.png beside the executable. GTK 3.10 deprecates
+// file-based window icons, and this binary is not installed into an icon theme.
+static void set_window_icon(GtkWindow* window) {
+  char exe_path[PATH_MAX];
+  const ssize_t length =
+      readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (length <= 0) {
+    return;
+  }
+  exe_path[length] = '\0';
+
+  g_autofree gchar* exe_dir = g_path_get_dirname(exe_path);
+  g_autofree gchar* icon_path =
+      g_build_filename(exe_dir, "app_icon.png", nullptr);
+  g_autoptr(GError) error = nullptr;
+  gboolean loaded = FALSE;
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  loaded = gtk_window_set_icon_from_file(window, icon_path, &error);
+  G_GNUC_END_IGNORE_DEPRECATIONS
+  if (!loaded) {
+    g_warning("Could not load the launcher icon: %s",
+              error != nullptr ? error->message : "unknown error");
+  }
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
@@ -24,6 +52,7 @@ static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  set_window_icon(window);
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
