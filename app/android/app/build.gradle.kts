@@ -42,11 +42,21 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // Public sideload key, checked in on purpose. CI and a local release
+        // build share it, so a phone can update the rolling APK in place.
+        // This is not a Play upload key. Password is not a secret.
+        create("sideload") {
+            storeFile = rootProject.file("../../tools/android_sideload/sideload.keystore")
+            storePassword = "fieldbim-sideload"
+            keyAlias = "sideload"
+            keyPassword = "fieldbim-sideload"
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("sideload")
         }
     }
 

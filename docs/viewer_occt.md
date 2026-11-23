@@ -26,7 +26,7 @@
 
 ## Что нажать
 
-1. Удалите просмотрщик `0.1.1`, если он установлен. Поставьте arm64 APK `tools/viewer_apk/field-bim-viewer-arm64.apk` (`0.1.2`, `targetSdk` 34).
+1. Поставьте свежий arm64 APK с <https://github.com/ViKing-sketch/3D-MViewer/releases/download/latest/field-bim-viewer-arm64.apk>. Файла в `tools/viewer_apk/` больше нет. Прогон `0.1.2` ниже — уже записанный результат, не инструкция ставить ту сборку.
 2. Откройте Field BIM Viewer.
 3. На экране моделей нажмите «Проба OCCT».
 4. Дождитесь текста в окне. Его можно выделить.

@@ -1,5 +1,6 @@
 #!/bin/sh
 # Packs the already-built android-28 arm64 OCCT probe into a debug APK.
+# The resulting .apk is gitignored. The phone install is the viewer release.
 # Does not talk to a phone. Paths default to the cloud build that produced
 # the probe; override them when the libraries live somewhere else.
 set -eu
