@@ -43,7 +43,11 @@ jobs:
         run: ctest --preset windows-msvc --output-on-failure -C Release
 
   linux-ifcopenshell:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is a CMake 4 / Boost 1.90 image. Boost 1.90 does not ship
+    # boost_systemConfig.cmake (system is header-only), so find_package fails
+    # before IfcOpenShell configures. 24.04 still has Boost 1.83, which this
+    # OCCT 7.8.1 build already passes with.
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
