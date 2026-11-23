@@ -21,3 +21,15 @@ app/**/GeneratedPluginRegistrant.*
 # Local packages produced while developing
 *.fbvpkg.log
 /tmp_pkg/
+
+# Phone packages are Actions artifacts (.github/workflows/android-apk.yml), not releases.
+# Prebuilt OCCT *.so under app/android/app/src/main/jniLibs/ stay tracked:
+# CI does not rebuild them.
+*.apk
+*.aab
+*.ap_
+*.idsig
+*.o
+*.obj
+*.ilk
+*.pdb

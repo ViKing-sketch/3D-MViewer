@@ -11,7 +11,7 @@ import 'occt_probe.dart';
 /// Priority is fixed and is the order in [decideGeometry]: exact OCCT/BinTools
 /// from format v4 `exact_geometry` first. Any failure selects the mesh already
 /// stored in the package. `brep.pack` is analytic AABB and is not an input.
-/// Walk does not read this value and stays not collision-aware.
+/// Walk does not read this value. It does not test collisions; a step passes through walls.
 enum GeometryMethod { exact, mesh }
 
 class GeometryDecision {

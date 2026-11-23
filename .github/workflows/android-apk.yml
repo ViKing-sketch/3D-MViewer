@@ -1,0 +1,73 @@
+name: Android APK
+
+# The arm64 APK is an Actions artifact only. Do not create a GitHub Release.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/**"
+      - "tools/check_release_apk.sh"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.1"
+          cache: true
+      # v3 still installs the removed SDK package `tools` and fails the job.
+      - uses: android-actions/setup-android@v4
+      - name: Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platforms;android-37.0" \
+            "platforms;android-36" \
+            "platforms;android-35" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+      - name: Build arm64 APK
+        working-directory: app
+        run: |
+          set -eu
+          code=$((10000 + ${GITHUB_RUN_NUMBER:-0}))
+          flutter pub get
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --split-per-abi \
+            --build-name "0.1.4" \
+            --build-number "$code"
+          src="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          if [ ! -f "$src" ]; then
+            echo "expected $src" >&2
+            ls -l build/app/outputs/flutter-apk >&2 || true
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$src" "$GITHUB_WORKSPACE/dist/field-bim-viewer-arm64.apk"
+      - name: Verify the APK
+        run: |
+          set -o pipefail
+          tools/check_release_apk.sh dist/field-bim-viewer-arm64.apk | tee dist/apk-build.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: field-bim-viewer-arm64
+          if-no-files-found: error
+          path: |
+            dist/field-bim-viewer-arm64.apk
+            dist/apk-build.txt
