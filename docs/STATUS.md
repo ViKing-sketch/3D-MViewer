@@ -1,8 +1,8 @@
 # Статус относительно ТЗ v0.2
 
-Сверка 2026-11-23 с `main` после #35. ТЗ — [TZ_Field_BIM_Viewer_v0_2.md](TZ_Field_BIM_Viewer_v0_2.md). Цель — Android; desktop и iOS вторичны. Матрица и очередь от 2026-11-08 оставлены как история, не как план.
+Сверка 2026-11-23 с `main` после #35. ТЗ — [TZ_Field_BIM_Viewer_v0_2.md](TZ_Field_BIM_Viewer_v0_2.md). Целевая платформа — Android. 3D на desktop ([#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32)) — низкий приоритет. iOS — после приёмки Android. Матрица и очередь от 2026-11-08 оставлены как история, не как план.
 
-Открытые задачи: [#30](https://github.com/ViKing-sketch/3D-MViewer/issues/30) приёмка, [#31](https://github.com/ViKing-sketch/3D-MViewer/issues/31) go/no-go OCCT, [#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32) 3D на Windows, [#33](https://github.com/ViKing-sketch/3D-MViewer/issues/33) тайлы. #34 закрывается уборкой APK.
+Открытые задачи: [#30](https://github.com/ViKing-sketch/3D-MViewer/issues/30) приёмка, [#31](https://github.com/ViKing-sketch/3D-MViewer/issues/31) go/no-go OCCT, [#33](https://github.com/ViKing-sketch/3D-MViewer/issues/33) тайлы. [#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32) — низкий приоритет. #34 закрывается уборкой APK.
 
 ## Готово
 
@@ -27,7 +27,8 @@
 4. STEP через OCCT XDE (FR-C-02): сейчас код 2. Для телефона пакет всё равно готовится на ПК.
 5. Второй LOD и инстансинг (FR-C-03), выбор LOD по расстоянию (FR-M-13 остаток).
 6. Докачка синхронизации и USB (FR-M-18, FR-C-17 остаток). Процент конвертации по элементам (FR-C-14 остаток). Сохранение камеры отдельно от замечания (FR-M-14).
-7. Позже и не начинать, пока не закрыт #30: iOS (FR-M-17, M4), DWG/DXF (FR-C-13, FR-M-16, S9), IGES (FR-C-12), MLT (FR-C-18, M6), шифрование и RuStore (ОВ-7). Desktop-рендер (#32) — вторично: на Windows и Linux слот 3D текстовый.
+7. Позже и не начинать, пока не закрыт #30: iOS (FR-M-17, M4), DWG/DXF (FR-C-13, FR-M-16, S9), IGES (FR-C-12), MLT (FR-C-18, M6), шифрование и RuStore (ОВ-7).
+8. 3D на Windows и Linux (#32) — низкий приоритет: целевая платформа Android. На desktop слот рендера сейчас текстовый.
 
 Этапы: M0 не выполнен. M1 и M2 частично (приёмка M2 открыта). M3–M6 не начаты.
 
