@@ -32,7 +32,13 @@ android {
         targetSdk = 34
         ndk {
             // Emulators used for field checks are x86_64; devices are arm64-v8a.
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // `flutter build apk --split-per-abi` sets ABI splits and rejects
+            // this list ("cannot be present when splits abi filters are set").
+            // The tool passes -Psplit-per-abi=true and chooses the ABIs itself.
+            val splitPerAbi = rootProject.findProperty("split-per-abi")?.toString() == "true"
+            if (!splitPerAbi) {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
         }
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
