@@ -1,0 +1,18 @@
+# Provisional artwork. To replace it, swap assets/icon/app_icon.png and run
+# `python3 tool/generate_launcher_icons.py` from the app directory.
+# That rewrites the adaptive foreground and the Android, iOS, and Windows icons.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/icon/app_icon.png
+  min_sdk_android: 24
+  remove_alpha_ios: true
+  background_color_ios: "#ffffff"
+  adaptive_icon_background: "#ffffff"
+  # M and magnifier on transparency, already inside the 66dp safe zone.
+  adaptive_icon_foreground: assets/icon/app_icon_foreground.png
+  adaptive_icon_foreground_inset: 0
+  windows:
+    generate: true
+    image_path: assets/icon/app_icon.png
+    icon_size: 256

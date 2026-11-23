@@ -61,15 +61,12 @@ class _ModelPageState extends State<ModelPage>
   Set<int> _standIns = {};
   void Function()? _cancelExtract;
   final _viewport = GlobalKey<FilamentViewportState>();
-  final _portraitKey = GlobalKey();
   final _sheet = DraggableScrollableController();
-  double _fitBottomInset = 0;
   int _fitToken = 0;
   bool _walking = false;
   GeometryDecision? _geometry;
   int _walkToken = 0;
   WalkPose? _walkPose;
-  int _insetTries = 0;
   late final TabController _tabs;
 
   @override
@@ -77,7 +74,6 @@ class _ModelPageState extends State<ModelPage>
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
     _tabs.addListener(_onTab);
-    _sheet.addListener(_syncFitInset);
     final type = FileSystemEntity.typeSync(widget.path);
     if (type == FileSystemEntityType.file) {
       _opening = true;
@@ -184,7 +180,6 @@ class _ModelPageState extends State<ModelPage>
     _cancelExtract?.call();
     _tabs.removeListener(_onTab);
     _tabs.dispose();
-    _sheet.removeListener(_syncFitInset);
     _sheet.dispose();
     _session?.close();
     super.dispose();
@@ -273,39 +268,6 @@ class _ModelPageState extends State<ModelPage>
       _frameToken++;
     });
     if (_tabs.index != 0) _tabs.animateTo(0);
-  }
-
-  void _scheduleFitInset(double? forced) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (forced != null) {
-        _pushFitInset(forced);
-        return;
-      }
-      _syncFitInset();
-    });
-  }
-
-  void _syncFitInset() {
-    final stack = _portraitKey.currentContext?.size?.height;
-    if (stack == null || stack <= 1) {
-      // The sheet is not laid out yet. Try the next frames, then stop.
-      if (_portraitKey.currentContext != null && _insetTries < 8) {
-        _insetTries++;
-        _scheduleFitInset(null);
-      }
-      return;
-    }
-    _insetTries = 0;
-    final sheet = _sheet.isAttached ? _sheet.size : 0.22;
-    final overlap = (sheet * stack).clamp(0.0, stack);
-    _pushFitInset(overlap / stack);
-  }
-
-  void _pushFitInset(double inset) {
-    final next = inset.clamp(0.0, 0.72);
-    if ((next - _fitBottomInset).abs() < 0.015) return;
-    setState(() => _fitBottomInset = next);
   }
 
   bool _sameIds(Set<int> a, Set<int> b) {
@@ -917,11 +879,9 @@ class _ModelPageState extends State<ModelPage>
         final selected = _selected;
         final viewport = _sectionFrame(_viewportOf(selected));
         if (wide) {
-          _scheduleFitInset(0);
           return _wideWorkspace(context, viewport, selected);
         }
         if (landscape) {
-          _scheduleFitInset(0);
           return _landscapeView(context, viewport, selected);
         }
         return _portraitView(context, viewport, selected);
@@ -958,9 +918,10 @@ class _ModelPageState extends State<ModelPage>
     ElementInfo? selected,
   ) {
     final strings = widget.strings;
-    _scheduleFitInset(null);
+    // The sheet paints over the full render view. Its size must not reach
+    // the Filament viewport: resizing that surface is what flashed at the
+    // bottom after the finger went up.
     return Stack(
-      key: _portraitKey,
       children: [
         Positioned.fill(child: viewport),
         Positioned(left: 0, right: 0, top: 4, child: _modelTools(strings)),
@@ -1215,7 +1176,6 @@ class _ModelPageState extends State<ModelPage>
             !portrait &&
             constraints.maxWidth > constraints.maxHeight &&
             constraints.maxHeight < 560;
-        final lift = portrait ? _fitBottomInset * constraints.maxHeight : 0.0;
         return Stack(
           children: [
             Positioned.fill(child: viewport),
@@ -1230,8 +1190,24 @@ class _ModelPageState extends State<ModelPage>
               Positioned(
                 left: 8,
                 right: 8,
-                bottom: 8 + lift,
-                child: _sectionPanel(widget.strings),
+                bottom: 8,
+                child: ListenableBuilder(
+                  listenable: _sheet,
+                  builder: (context, child) {
+                    // Keep the section controls above the overlay. This does
+                    // not change the render surface under the sheet.
+                    final fraction = portrait && _sheet.isAttached
+                        ? _sheet.size.clamp(0.0, 0.72)
+                        : 0.0;
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: fraction * constraints.maxHeight,
+                      ),
+                      child: child,
+                    );
+                  },
+                  child: _sectionPanel(widget.strings),
+                ),
               ),
           ],
         );
@@ -1485,7 +1461,6 @@ class _ModelPageState extends State<ModelPage>
       frameToken: _frameToken,
       fitToken: _fitToken,
       walk: _walkCommand,
-      bottomInset: _fitBottomInset,
       onPick: _choose,
       onStandIns: _onStandIns,
       onSectionSpan: (_, box, at) {
