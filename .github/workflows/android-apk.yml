@@ -1,8 +1,6 @@
-name: Android release APK
+name: Android APK
 
-# Phone builds are not committed. Every push to main (and a manual run)
-# replaces the asset on the rolling prerelease tag `latest`:
-# https://github.com/ViKing-sketch/3D-MViewer/releases/download/latest/field-bim-viewer-arm64.apk
+# The arm64 APK is an Actions artifact only. Do not create a GitHub Release.
 on:
   push:
     branches:
@@ -11,9 +9,8 @@ on:
   pull_request:
     paths:
       - "app/**"
-      - "tools/android_sideload/**"
       - "tools/check_release_apk.sh"
-      - ".github/workflows/android-release.yml"
+      - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: read
@@ -44,7 +41,7 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
-      - name: Build release APK (arm64)
+      - name: Build arm64 APK
         working-directory: app
         run: |
           set -eu
@@ -63,7 +60,7 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp "$src" "$GITHUB_WORKSPACE/dist/field-bim-viewer-arm64.apk"
-      - name: Verify the APK is installable
+      - name: Verify the APK
         run: |
           set -o pipefail
           tools/check_release_apk.sh dist/field-bim-viewer-arm64.apk | tee dist/apk-build.txt
@@ -74,35 +71,3 @@ jobs:
           path: |
             dist/field-bim-viewer-arm64.apk
             dist/apk-build.txt
-
-  publish:
-    needs: apk
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: field-bim-viewer-arm64
-          path: dist
-      - name: Publish rolling prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          asset="dist/field-bim-viewer-arm64.apk"
-          test -f "$asset"
-          title="Field BIM Viewer (latest)"
-          if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest "$asset" --clobber
-            gh release edit latest --prerelease --title "$title" --notes-file dist/apk-build.txt
-          else
-            gh release create latest "$asset" \
-              --prerelease \
-              --title "$title" \
-              --notes-file dist/apk-build.txt \
-              --target "${{ github.sha }}"
-          fi
-          gh release view latest --json url,tagName,isPrerelease,assets \
-            --jq '{url,tag:.tagName,prerelease:.isPrerelease,assets:[.assets[].name]}'

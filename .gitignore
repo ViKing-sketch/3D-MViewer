@@ -22,7 +22,7 @@ app/**/GeneratedPluginRegistrant.*
 *.fbvpkg.log
 /tmp_pkg/
 
-# Phone packages are published by .github/workflows/android-release.yml.
+# Phone packages are Actions artifacts (.github/workflows/android-apk.yml), not releases.
 # Prebuilt OCCT *.so under app/android/app/src/main/jniLibs/ stay tracked:
 # CI does not rebuild them.
 *.apk

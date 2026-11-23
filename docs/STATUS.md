@@ -2,20 +2,20 @@
 
 Сверка 2026-11-23 с `main` после #35. ТЗ — [TZ_Field_BIM_Viewer_v0_2.md](TZ_Field_BIM_Viewer_v0_2.md). Целевая платформа — Android. 3D на desktop ([#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32)) — низкий приоритет. iOS — после приёмки Android. Матрица и очередь от 2026-11-08 оставлены как история, не как план.
 
-Открытые задачи: [#30](https://github.com/ViKing-sketch/3D-MViewer/issues/30) приёмка, [#31](https://github.com/ViKing-sketch/3D-MViewer/issues/31) go/no-go OCCT, [#33](https://github.com/ViKing-sketch/3D-MViewer/issues/33) тайлы. [#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32) — низкий приоритет. #34 закрывается уборкой APK.
+Открытые задачи: [#30](https://github.com/ViKing-sketch/3D-MViewer/issues/30) приёмка, [#31](https://github.com/ViKing-sketch/3D-MViewer/issues/31) go/no-go OCCT, [#33](https://github.com/ViKing-sketch/3D-MViewer/issues/33) тайлы, [#34](https://github.com/ViKing-sketch/3D-MViewer/issues/34) раздача APK не согласована. [#32](https://github.com/ViKing-sketch/3D-MViewer/issues/32) — низкий приоритет.
 
 ## Готово
 
 - Конвертер IFC: свой разбор и, при `FBV_WITH_IFCOPENSHELL`, IfcOpenShell 0.8.5 + OCCT 7.8.1 (FR-C-01, частично: не вся геометрия IFC). Local origin, метры, GlobalId (FR-C-06). `pkg_validate` (FR-C-09). Лог и коды 0/2/3/4 (FR-C-08). CLI: точность, класс, мешер, потоки, память (FR-C-10). Docker и CI Linux/Windows, в том числе IfcOpenShell (FR-C-11).
 - SQLite: дерево, этажи, типы, Pset/Qto, материалы, классификация, FTS5, `spec_views` (FR-C-04, FR-C-07). Системы — format v2. Тайл = этаж × дисциплина — format v3, индекс есть (FR-C-15, частично). BinTools формы OCCT — format v4, пишет сборка с IfcOpenShell; аналитический мешер оставляет слот пустым (FR-C-05, частично). `brep.pack` по-прежнему AABB.
 - Оболочка: страница «Конвертер», две стадии прогресса, не процент по элементам (FR-C-14, частично).
-- Android, Filament 1.77.3, не заглушка: орбита, панорама, зум, виды, «вписать», ходьба по этажу без столкновений (FR-M-03). Касание, свойства, Pset/Qto (FR-M-04). Дерево, скрыть, изолировать, рентген (FR-M-05; сборок STEP нет). Фильтры этаж, класс, материал, система (FR-M-06). Поиск FTS5 (FR-M-07). Сводка и CSV (FR-M-08). Одна плоскость сечения, без контура OCCT (FR-M-11, частично). Книжная и альбомная ориентация, тёмная тема (FR-M-12, частично; планшет отдельно не гоняли). Бюджет GLB и коробочные заглушки, без LOD по расстоянию (FR-M-13, частично). Русский и английский (FR-M-19, NFR-14).
+- Android, Filament 1.77.3, не заглушка: орбита, панорама, зум, виды, «вписать», ходьба по этажу (без проверки столкновений, шаг проходит сквозь стены) (FR-M-03). Касание, свойства, Pset/Qto (FR-M-04). Дерево, скрыть, изолировать, рентген (FR-M-05; сборок STEP нет). Фильтры этаж, класс, материал, система (FR-M-06). Поиск FTS5 (FR-M-07). Сводка и CSV (FR-M-08). Одна плоскость сечения, без контура OCCT (FR-M-11, частично). Книжная и альбомная ориентация, тёмная тема (FR-M-12, частично; планшет отдельно не гоняли). Бюджет GLB и коробочные заглушки, без LOD по расстоянию (FR-M-13, частично). Русский и английский (FR-M-19, NFR-14).
 - Импорт SAF и «Поделиться», список с датой и планом AABB, не снимок (FR-M-01, частично). Просмотр без сети (FR-M-02, NFR-01).
 - Замечания, фото, ракурс, BCF 2.1 (FR-M-15, S8). Именованных видов нет (FR-M-14).
 - Синхронизация `fbv-sync-1`: пакеты, замечания, BCF; новее по времени; SHA-256; запись через временный файл (FR-C-17, FR-M-18, NFR-15, частично). USB нет. Докачки с места обрыва нет.
 - Проба OCCT (коробка 6 м³, BinTools 4494 байт) вшита в просмотрщик и прошла на телефоне Android 12 arm64. Это не M0 и не устройство уровня Note 10+.
 - Иконка, шторка свойств поверх вида и публичные образцы `testdata/public/` — в main через #35. PR #24–#27 тем самым закрыты по сути.
-- APK на телефон не лежит в git. Release `arm64-v8a` собирает workflow «Android release APK» на каждый push в `main` и по `workflow_dispatch`, кладётся в prerelease `latest`: <https://github.com/ViKing-sketch/3D-MViewer/releases/download/latest/field-bim-viewer-arm64.apk>
+- APK в git нет. Workflow «Android APK» собирает arm64 и кладёт файл артефактом Actions (push в `main` и `workflow_dispatch`). GitHub Release нет. Как отдавать пакет на телефон, не согласовано (#34).
 
 ## Нужно сделать
 
@@ -40,5 +40,5 @@
 - Числовые NFR с пометкой [П] не подтверждались на устройстве. Модель до 7 ГБ IFC не проверялась. Запись ZIP без ZIP64, предел 4 ГиБ.
 - В git оставлены пребилды `app/android/app/src/main/jniLibs/arm64-v8a/*.so` (OCCT 7.8.1, `libc++_shared`, `libocct_probe_jni`) и `assets/materials/*.filamat`. CI их не собирает; без `.so` в APK нет пробы OCCT. Сборка вручную: `tools/android_occt_probe/build_android.sh`.
 - История git: pack около 83 МиБ, из них около 73 МиБ — старые APK. `git filter-repo` имеет смысл, если нужен меньший клон. Этот набор правок историю не переписывает.
-- Релизный APK подписан публичным ключом `tools/android_sideload` (не Play). `versionCode` в CI растёт, обновление ставится поверх. Старый APK с другой подписью нужно удалить один раз.
+- APK из Actions подписан debug-ключом раннера. Постоянной ссылки и GitHub Release нет (#34).
 - Лицензия продукта не выбрана. OCCT на устройстве — LGPL (NFR-13).

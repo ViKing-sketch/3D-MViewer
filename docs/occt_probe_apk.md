@@ -1,6 +1,6 @@
 # Тестовый APK с пробой OCCT
 
-Это не просмотрщик и не релиз. Отдельный APK пробы из git убран. Та же кнопка есть в просмотрщике; ставить нужно его: <https://github.com/ViKing-sketch/3D-MViewer/releases/download/latest/field-bim-viewer-arm64.apk>. Исходники отдельной пробы остались в `tools/occt_probe_apk/` и `tools/android_occt_probe/`. Ниже — как был устроен пакет `0.2-probe` и что он показал на телефоне.
+Это не просмотрщик. Отдельный APK пробы из git убран. Та же кнопка есть в просмотрщике; его APK — артефакт workflow «Android APK», не GitHub Release. Исходники отдельной пробы остались в `tools/occt_probe_apk/` и `tools/android_occt_probe/`. Ниже — как был устроен пакет `0.2-probe` и что он показал на телефоне.
 
 Пакет был только для `arm64-v8a`, `versionName` `0.2-probe`, `targetSdk` 34. Внутри исполняемый файл пробы (в пакете он называется `libocct_probe.so`, интерпретатор `/system/bin/linker64`, метка ELF API 28) и библиотека `libocct_probe_jni.so` с тем же замером. Рядом девять библиотек OCCT и `libc++_shared.so`. Замер — ящик 1×2×3 м, ожидаемые объём 6 м³ и площадь 22 м².
 

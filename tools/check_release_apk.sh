@@ -78,10 +78,9 @@ fi
 version_line=$(printf '%s\n' "$badging" | sed -n '1p')
 bytes=$(wc -c < "$apk" | tr -d ' ')
 cat <<EOF
-Field BIM Viewer, arm64 release.
+Field BIM Viewer, arm64 APK. Actions artifact, not a GitHub Release.
 commit: ${GITHUB_SHA:-local}
 $version_line
 bytes: $bytes
-Подпись: публичный ключ tools/android_sideload (не Google Play).
-Скачать: https://github.com/ViKing-sketch/3D-MViewer/releases/download/latest/field-bim-viewer-arm64.apk
+Подпись: debug-ключ сборки. Keystore в репозитории нет.
 EOF
