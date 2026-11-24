@@ -190,6 +190,9 @@ class S {
   String syncDone(int copied, int kept) => russian
       ? 'Синхронизация: скопировано $copied, оставлено $kept'
       : 'Sync: copied $copied, kept $kept';
+  String syncInterrupted(String path, int got, int total) => russian
+      ? 'Обрыв: $path, получено $got из $total. Файл на устройстве не заменён. Следующий забор продолжит с этого места.'
+      : 'Stopped: $path, received $got of $total. The file on this device was not replaced. The next pull continues from here.';
   String syncListening(String url) => russian
       ? 'Слушаю $url. Для другого компьютера подставьте адрес этой машины.'
       : 'Listening at $url. Another computer uses this machine\'s address.';
