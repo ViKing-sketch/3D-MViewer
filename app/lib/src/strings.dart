@@ -35,6 +35,14 @@ class S {
   String get csvFolder => russian ? 'Папка для CSV' : 'Folder for the CSV';
   String get csvSave => russian ? 'Сохранить' : 'Save';
   String get theme => russian ? 'Тема' : 'Theme';
+  String themeMode(String mode) {
+    return switch (mode) {
+      'dark' => russian ? 'Тема: тёмная' : 'Theme: dark',
+      'contrast' => russian ? 'Тема: контраст' : 'Theme: contrast',
+      _ => russian ? 'Тема: светлая' : 'Theme: light',
+    };
+  }
+
   String get language => russian ? 'Язык' : 'Language';
   String get offline => russian
       ? 'Офлайн. Сеть приложению не нужна.'

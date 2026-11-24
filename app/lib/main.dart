@@ -33,7 +33,7 @@ class FieldBimApp extends StatefulWidget {
 
 class _FieldBimAppState extends State<FieldBimApp> {
   late bool _russian = widget.russian;
-  ThemeMode _mode = ThemeMode.light;
+  ViewerTheme _themeMode = ViewerTheme.light;
   final _navigator = GlobalKey<NavigatorState>();
   final _library = GlobalKey<LibraryPageState>();
 
@@ -64,25 +64,34 @@ class _FieldBimAppState extends State<FieldBimApp> {
   void _showImportError(String message) {
     final context = _navigator.currentContext;
     if (context == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     final strings = S(_russian);
+    final theme = _themeData(_themeMode);
     return MaterialApp(
       navigatorKey: _navigator,
       title: strings.appTitle,
       debugShowCheckedModeBanner: false,
-      themeMode: _mode,
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
+      themeMode: _themeMode == ViewerTheme.dark
+          ? ThemeMode.dark
+          : ThemeMode.light,
+      theme: _themeMode == ViewerTheme.contrast
+          ? theme
+          : _themeData(ViewerTheme.light),
+      darkTheme: _themeMode == ViewerTheme.contrast
+          ? theme
+          : _themeData(ViewerTheme.dark),
       builder: (context, child) {
         return AppearanceScope(
           strings: strings,
-          dark: _mode == ThemeMode.dark,
+          theme: _themeMode,
           onTheme: () => setState(() {
-            _mode = _mode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+            _themeMode = nextViewerTheme(_themeMode);
           }),
           onLanguage: () => setState(() => _russian = !_russian),
           child: child ?? const SizedBox.shrink(),
@@ -90,19 +99,45 @@ class _FieldBimAppState extends State<FieldBimApp> {
       },
       home: widget.autoOpenPath != null
           ? ModelPage(path: widget.autoOpenPath!, strings: strings)
-          : LibraryPage(key: _library, strings: strings, initialDirectory: widget.initialLibrary),
+          : LibraryPage(
+              key: _library,
+              strings: strings,
+              initialDirectory: widget.initialLibrary,
+            ),
     );
   }
 
-  ThemeData _theme(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF0B3A82), brightness: brightness);
+  ThemeData _themeData(ViewerTheme mode) {
+    final ColorScheme scheme;
+    switch (mode) {
+      case ViewerTheme.light:
+        scheme = ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0B3A82),
+          brightness: Brightness.light,
+        );
+      case ViewerTheme.dark:
+        scheme = ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0B3A82),
+          brightness: Brightness.dark,
+        );
+      case ViewerTheme.contrast:
+        scheme = const ColorScheme.highContrastDark();
+    }
+    final large = mode == ViewerTheme.contrast;
+    final control = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+      tapTargetSize: MaterialTapTargetSize.padded,
+    );
     return ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
       visualDensity: VisualDensity.standard,
+      extensions: [ViewerThemeMark(mode.name)],
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(minimumSize: const Size(48, 48)),
       ),
+      textButtonTheme: large ? TextButtonThemeData(style: control) : null,
+      iconButtonTheme: large ? IconButtonThemeData(style: control) : null,
     );
   }
 }
