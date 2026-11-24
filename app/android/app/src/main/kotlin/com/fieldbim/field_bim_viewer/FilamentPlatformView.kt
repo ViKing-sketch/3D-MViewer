@@ -126,6 +126,7 @@ class FilamentPlatformView(
     private var walkMode = false
     private var walkToken = -1
     private var walkPose = WalkRig.Pose(0f, 1.6f, 0f, 0f, 0f)
+    private var walkAxes = WalkRig.Axes()
     private var walkGesture: WalkGestures? = null
     private var dollyPending = 0f
     private var dollySpeed = 0.25f
@@ -441,11 +442,13 @@ class FilamentPlatformView(
                         return@post
                     }
                     if (walkMode && token == walkToken) return@post
+                    val entering = !walkMode
                     walkToken = token
                     walkPose = WalkRig.fromLook(
                         eye[0], eye[1], eye[2], look[0], look[1], look[2],
                     )
                     walkMode = true
+                    if (entering) walkAxes = WalkRig.Axes()
                     gesture = null
                     walkGesture = WalkGestures(::nudgeLook, ::nudgeMove)
                     near = 0.05
@@ -457,6 +460,17 @@ class FilamentPlatformView(
                         "walk eye=${eye[0]},${eye[1]},${eye[2]} " +
                             "look=${look[0]},${look[1]},${look[2]}",
                     )
+                }
+                result.success(null)
+            }
+            "setWalkAxes" -> {
+                val strafe = stickAxis(call.argument<Number>("strafe"))
+                val forward = stickAxis(call.argument<Number>("forward"))
+                val yaw = stickAxis(call.argument<Number>("yaw"))
+                val pitch = stickAxis(call.argument<Number>("pitch"))
+                renderHandler.post {
+                    if (destroyed || !walkMode) return@post
+                    walkAxes = WalkRig.Axes(strafe, forward, yaw, pitch)
                 }
                 result.success(null)
             }
@@ -709,6 +723,7 @@ class FilamentPlatformView(
         preset = "iso"
         walkMode = false
         walkToken = -1
+        walkAxes = WalkRig.Axes()
         walkGesture = null
         selected = 0L
         hidden = HashSet()
@@ -1182,6 +1197,9 @@ class FilamentPlatformView(
         val dt = if (lastFrame == 0L) 0f else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceIn(0f, 0.1f)
         lastFrame = frameTimeNanos
         if (walkMode) {
+            if (walkAxes.engaged && dt > 0f) {
+                walkPose = WalkRig.integrate(walkPose, walkAxes, dt)
+            }
             val pose = walkPose
             val look = WalkRig.forward(pose.yaw, pose.pitch)
             lastEye[0] = pose.eyeX.toDouble()
@@ -1347,6 +1365,7 @@ class FilamentPlatformView(
 
     private fun frame(box: FloatArray?, cameraPreset: String) {
         walkMode = false
+        walkAxes = WalkRig.Axes()
         walkGesture = null
         val bounds = box
         if (bounds == null || bounds.size < 6) {
@@ -1584,6 +1603,7 @@ class FilamentPlatformView(
         lastTarget[1] = pose.eyeY + look[1].toDouble()
         lastTarget[2] = pose.eyeZ + look[2].toDouble()
         walkMode = false
+        walkAxes = WalkRig.Axes()
         walkGesture = null
         val zoom = max(dollySpeed, 0.25f)
         manipulator = Manipulator.Builder()
@@ -1615,6 +1635,7 @@ class FilamentPlatformView(
         lastEye = doubleArrayOf(eye[0].toDouble(), eye[1].toDouble(), eye[2].toDouble())
         lastTarget = doubleArrayOf(target[0].toDouble(), target[1].toDouble(), target[2].toDouble())
         walkMode = false
+        walkAxes = WalkRig.Axes()
         walkGesture = null
         baseNear = max(0.02, distance / 4000.0)
         near = baseNear
@@ -1642,6 +1663,12 @@ class FilamentPlatformView(
                 0.0, 1.0, 0.0,
             )
         }
+    }
+
+    private fun stickAxis(raw: Number?): Float {
+        val value = raw?.toFloat() ?: return 0f
+        if (value.isNaN() || value.isInfinite()) return 0f
+        return value.coerceIn(-1f, 1f)
     }
 
     private fun vec3(raw: List<*>?): FloatArray? {

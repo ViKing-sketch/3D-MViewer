@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 
 import 'walk_pose.dart';
+import 'walk_stick.dart';
 
 /// Commands for one `fbv/filament` platform view.
 ///
@@ -67,6 +68,19 @@ class FilamentCommands {
       'token': walk.token,
       'eye': [walk.eyeX, walk.eyeY, walk.eyeZ],
       'look': [walk.lookX, walk.lookY, walk.lookZ],
+    });
+  }
+
+  /// Stick axes for the current walk. Ignored by the native view outside it.
+  ///
+  /// Values are already past the dead zone. The native frame loop turns them
+  /// into a horizontal step and a clamped look. Orbit gestures are untouched.
+  Future<void> setWalkAxes(WalkAxes axes) {
+    return channel.invokeMethod<void>('setWalkAxes', {
+      'strafe': axes.strafe,
+      'forward': axes.forward,
+      'yaw': axes.yaw,
+      'pitch': axes.pitch,
     });
   }
 

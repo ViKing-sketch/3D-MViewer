@@ -111,6 +111,8 @@ class S {
   String get cameraHome => russian ? 'Камера по умолчанию' : 'Default camera';
   String get walk => russian ? 'По этажу' : 'Walk';
   String get walkStop => russian ? 'Орбита' : 'Orbit';
+  String get walkMove => russian ? 'Ходьба' : 'Move';
+  String get walkLook => russian ? 'Взгляд' : 'Look';
   String walkHint(String storey, {required bool clear}) {
     final place = clear
         ? (russian ? 'старт вне габаритов' : 'start is outside the boxes')

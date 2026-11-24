@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:field_bim_viewer/src/filament_channel.dart';
+import 'package:field_bim_viewer/src/walk_stick.dart';
 import 'package:field_bim_viewer/src/glb_ids.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -101,6 +102,26 @@ void main() {
     expect(section['inset'], 0.3);
     expect((calls[3].arguments as Map)['selected'], isTrue);
     expect((calls[4].arguments as Map)['preset'], 'top');
+  });
+
+  test('walk stick axes are four finite channels', () async {
+    const channel = MethodChannel('fbv/filament/sticks');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+    final commands = FilamentCommands(channel);
+    await commands.setWalkAxes(
+      const WalkAxes(strafe: 0.25, forward: -0.5, yaw: 1, pitch: -0.2),
+    );
+    expect(calls.single.method, 'setWalkAxes');
+    final args = calls.single.arguments as Map<dynamic, dynamic>;
+    expect(args['strafe'], 0.25);
+    expect(args['forward'], -0.5);
+    expect(args['yaw'], 1);
+    expect(args['pitch'], -0.2);
   });
 }
 

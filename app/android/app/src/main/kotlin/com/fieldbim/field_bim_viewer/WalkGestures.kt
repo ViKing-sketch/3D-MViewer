@@ -6,6 +6,9 @@ import kotlin.math.hypot
 /**
  * One finger looks around. Two fingers walk: drag moves, pinch steps forward.
  * The eye height is left to [WalkRig.move].
+ *
+ * On-screen sticks are a separate Flutter overlay. Touches that miss the pads
+ * still arrive here, and both can move the same pose.
  */
 internal class WalkGestures(
     private val onLook: (dx: Float, dy: Float) -> Unit,
