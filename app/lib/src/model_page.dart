@@ -17,6 +17,8 @@ import 'remarks_section.dart';
 import 'strings.dart';
 import 'visibility.dart';
 import 'walk_pose.dart';
+import 'walk_stick.dart';
+import 'walk_sticks.dart';
 
 class ModelPage extends StatefulWidget {
   const ModelPage({super.key, required this.path, required this.strings});
@@ -412,7 +414,16 @@ class _ModelPageState extends State<ModelPage>
 
   void _stopWalk() {
     if (!_walking) return;
+    unawaited(
+      _viewport.currentState?.setWalkAxes(WalkAxes.zero) ?? Future.value(),
+    );
     setState(() => _walking = false);
+  }
+
+  void _onWalkAxes(WalkAxes axes) {
+    final view = _viewport.currentState;
+    if (view == null) return;
+    unawaited(view.setWalkAxes(axes));
   }
 
   Future<RemarkViewpoint> _captureViewpoint(ElementInfo element) async {
@@ -476,11 +487,11 @@ class _ModelPageState extends State<ModelPage>
   }
 
   void _toggleWalk() {
+    if (_walking) {
+      _stopWalk();
+      return;
+    }
     setState(() {
-      if (_walking) {
-        _walking = false;
-        return;
-      }
       _walkPose = _currentWalkPose();
       _walkToken++;
       _walking = true;
@@ -952,6 +963,25 @@ class _ModelPageState extends State<ModelPage>
             );
           },
         ),
+        if (_walking)
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return ListenableBuilder(
+                  listenable: _sheet,
+                  builder: (context, _) {
+                    final fraction = _sheet.isAttached
+                        ? _sheet.size.clamp(0.0, 0.92)
+                        : 0.22;
+                    return _walkSticks(
+                      strings,
+                      bottom: fraction * constraints.maxHeight + 8,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
       ],
     );
   }
@@ -990,7 +1020,23 @@ class _ModelPageState extends State<ModelPage>
           top: _walking ? 96 : 46,
           child: _geometryBanner(strings),
         ),
+        if (_walking)
+          Positioned.fill(
+            child: _walkSticks(
+              strings,
+              bottom: 12 + MediaQuery.paddingOf(context).bottom,
+            ),
+          ),
       ],
+    );
+  }
+
+  Widget _walkSticks(S strings, {required double bottom}) {
+    final sectionLift = _section.enabled ? 112.0 : 0.0;
+    return WalkStickLayer(
+      strings: strings,
+      bottom: bottom + sectionLift,
+      onChanged: _onWalkAxes,
     );
   }
 

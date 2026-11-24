@@ -489,18 +489,35 @@ void main() {
     await tester.pump();
     final toggle = find.byKey(const ValueKey('walk-toggle'));
     await tester.ensureVisible(toggle);
+    expect(find.byKey(const ValueKey('walk-move-stick')), findsNothing);
+    expect(find.byKey(const ValueKey('walk-look-stick')), findsNothing);
     await tester.tap(toggle);
     await tester.pump();
     expect(find.byKey(const ValueKey('walk-hint')), findsOneWidget);
+    expect(find.byKey(const ValueKey('walk-move-stick')), findsOneWidget);
+    expect(find.byKey(const ValueKey('walk-look-stick')), findsOneWidget);
     expect(find.textContaining('Level 1'), findsWidgets);
     expect(find.textContaining('глаз 1,6 м'), findsOneWidget);
     expect(find.textContaining('сквозь стены'), findsOneWidget);
     expect(find.textContaining('старт вне габаритов'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const ValueKey('walk-move-stick')),
+      const Offset(0, -36),
+    );
+    await tester.pump();
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('walk-move-stick')), findsOneWidget);
+    expect(find.byKey(const ValueKey('walk-look-stick')), findsOneWidget);
+    tester.view.physicalSize = const Size(1000, 800);
+    await tester.pump();
     await tester.tap(find.byTooltip(const S(true).actions));
     await tester.pumpAndSettle();
     await tester.tap(find.text(const S(true).fitAll));
     await tester.pump();
     expect(find.byKey(const ValueKey('walk-hint')), findsNothing);
+    expect(find.byKey(const ValueKey('walk-move-stick')), findsNothing);
+    expect(find.byKey(const ValueKey('walk-look-stick')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

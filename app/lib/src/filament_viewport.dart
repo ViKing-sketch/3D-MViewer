@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'filament_channel.dart';
 import 'strings.dart';
 import 'walk_pose.dart';
+import 'walk_stick.dart';
 
 /// Filament platform view on Android. Other targets keep the layout slot.
 ///
@@ -85,6 +86,38 @@ class FilamentViewportState extends State<FilamentViewport> {
   Future<void> setCamera(String preset) =>
       _commands?.setCamera(preset) ?? Future<void>.value();
 
+  WalkAxes _walkAxes = WalkAxes.zero;
+
+  /// Holds the latest stick sample. Repeated samples are not sent again.
+  Future<void> setWalkAxes(WalkAxes axes) async {
+    final next = _quantizeAxes(axes);
+    if (next == _walkAxes) return;
+    _walkAxes = next;
+    final commands = _commands;
+    if (commands == null) return;
+    try {
+      await commands.setWalkAxes(next);
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  WalkAxes _quantizeAxes(WalkAxes axes) {
+    double snap(double value) {
+      if (!value.isFinite) return 0;
+      return (value * 100).roundToDouble() / 100;
+    }
+
+    return WalkAxes(
+      strafe: snap(axes.strafe),
+      forward: snap(axes.forward),
+      yaw: snap(axes.yaw),
+      pitch: snap(axes.pitch),
+    );
+  }
+
   Future<void> setFitInset(double bottom) =>
       _commands?.setFitInset(bottom) ?? Future<void>.value();
 
@@ -149,6 +182,11 @@ class FilamentViewportState extends State<FilamentViewport> {
     await _pushState();
     await _pushSection();
     await _pushWalk();
+    if (widget.walk.enabled && _walkAxes != WalkAxes.zero) {
+      final pending = _walkAxes;
+      _walkAxes = WalkAxes.zero;
+      await setWalkAxes(pending);
+    }
   }
 
   void _applyStatus(Map<dynamic, dynamic> raw) {
@@ -215,6 +253,7 @@ class FilamentViewportState extends State<FilamentViewport> {
     final commands = _commands;
     if (commands == null) return;
     await commands.setNavigation(widget.walk);
+    if (!widget.walk.enabled) _walkAxes = WalkAxes.zero;
   }
 
   @override
