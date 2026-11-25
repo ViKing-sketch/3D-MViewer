@@ -88,6 +88,15 @@ class LibraryPageState extends State<LibraryPage> {
         _packages = scanLibrary(folder);
         _error = widget.strings.syncDone(result.copied, result.kept);
       });
+    } on SyncInterrupted catch (error) {
+      if (!mounted) return;
+      setState(
+        () => _error = widget.strings.syncInterrupted(
+          error.path,
+          error.got,
+          error.total,
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -127,9 +136,7 @@ class LibraryPageState extends State<LibraryPage> {
           title: Text(widget.strings.occtProbe),
           content: SizedBox(
             width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: SelectableText(text),
-            ),
+            child: SingleChildScrollView(child: SelectableText(text)),
           ),
           actions: [
             TextButton(

@@ -157,11 +157,37 @@ class SyncPull {
   final int kept;
 }
 
+/// The transfer stopped before the manifest length was on disk.
+///
+/// The previous file in the library is left as it was. Bytes already
+/// received stay in `.fbv-sync-parts` and the next pull continues with
+/// `Range`.
+class SyncInterrupted implements Exception {
+  const SyncInterrupted(this.path, this.got, this.total);
+
+  final String path;
+  final int got;
+  final int total;
+
+  @override
+  String toString() => 'sync interrupted $path $got/$total';
+}
+
 class SyncServer {
   SyncServer._(this.server, this.rootPath);
 
   final HttpServer server;
   final String rootPath;
+
+  /// Stops each file body after this many bytes. Null sends the whole body.
+  ///
+  /// A listener on a real peer leaves this null. Tests set it to drop a
+  /// transfer in the middle of one file.
+  int? responseByteLimit;
+
+  /// Range headers seen by file requests, including null when the header is
+  /// absent. Tests read this. A listener does not.
+  final List<String?> requestRanges = [];
 
   Uri get base => Uri.parse('http://${server.address.host}:${server.port}');
 
@@ -216,9 +242,61 @@ class SyncServer {
       request.response.statusCode = HttpStatus.notFound;
       return;
     }
+    final length = file.lengthSync();
+    requestRanges.add(request.headers.value(HttpHeaders.rangeHeader));
+    final ({int start, int end})? range;
+    try {
+      range = _byteRange(
+        request.headers.value(HttpHeaders.rangeHeader),
+        length,
+      );
+    } on FormatException {
+      request.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+      request.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes */$length',
+      );
+      return;
+    }
+    request.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
     request.response.headers.contentType = ContentType.binary;
-    await request.response.addStream(file.openRead());
+    if (range != null) {
+      final last = range.end == 0 ? 0 : range.end - 1;
+      request.response.statusCode = HttpStatus.partialContent;
+      request.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes ${range.start}-$last/$length',
+      );
+    }
+    if (length == 0 || (range != null && range.start == range.end)) return;
+    final opened = range == null
+        ? file.openRead()
+        : file.openRead(range.start, range.end);
+    var remaining = responseByteLimit;
+    await for (final chunk in opened) {
+      var slice = chunk;
+      if (remaining != null) {
+        if (remaining <= 0) break;
+        if (slice.length > remaining) slice = slice.sublist(0, remaining);
+        remaining -= slice.length;
+      }
+      request.response.add(slice);
+      if (remaining != null && remaining <= 0) break;
+    }
   }
+}
+
+/// `bytes=START-` or `bytes=START-END`, END inclusive. Null means the whole file.
+({int start, int end})? _byteRange(String? header, int length) {
+  if (header == null || header.isEmpty) return null;
+  final match = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(header.trim());
+  if (match == null) throw const FormatException('range');
+  final start = int.parse(match.group(1)!);
+  if (start < 0 || start >= length) throw const FormatException('range');
+  final endText = match.group(2)!;
+  final last = endText.isEmpty ? length - 1 : int.parse(endText);
+  if (last < start || last >= length) throw const FormatException('range');
+  return (start: start, end: last + 1);
 }
 
 Future<SyncPull> pullLibrary(String rootPath, Uri base) async {
@@ -245,34 +323,187 @@ Future<SyncPull> pullLibrary(String rootPath, Uri base) async {
         kept += 1;
         continue;
       }
-      final bytes = await _getBytes(
-        client,
-        base.replace(
-          path: '/fbv-sync/file',
-          queryParameters: {'path': remote.path},
-        ),
-      );
-      final digest = sha256.convert(bytes).toString();
-      if (digest != remote.sha256 || bytes.length != remote.bytes) {
-        throw const FileSystemException(
-          'sync hash does not match the manifest',
-        );
-      }
-      final dest = File(p.join(root.path, remote.path));
-      if (!p.isWithin(root.absolute.path, dest.absolute.path)) {
-        throw const FileSystemException('sync path leaves the library');
-      }
-      dest.parent.createSync(recursive: true);
-      final tmp = File('${dest.path}.fbv-sync-tmp');
-      tmp.writeAsBytesSync(bytes);
-      tmp.renameSync(dest.path);
-      dest.setLastModifiedSync(remote.mtimeUtc);
+      await _resumeFile(client, root.path, base, remote);
       copied += 1;
     }
     return SyncPull(copied: copied, kept: kept);
   } finally {
     client.close(force: true);
   }
+}
+
+Future<void> _resumeFile(
+  HttpClient client,
+  String rootPath,
+  Uri base,
+  SyncFile remote,
+) async {
+  final root = Directory(rootPath);
+  final dest = File(p.join(root.path, remote.path));
+  if (!p.isWithin(root.absolute.path, dest.absolute.path)) {
+    throw const FileSystemException('sync path leaves the library');
+  }
+  final uri = base.replace(
+    path: '/fbv-sync/file',
+    queryParameters: {'path': remote.path},
+  );
+  var got = _usablePart(rootPath, remote);
+  var response = await _openFile(client, uri, got);
+  if (response.statusCode == HttpStatus.requestedRangeNotSatisfiable) {
+    await response.drain<void>();
+    _deletePart(rootPath, remote.path);
+    got = 0;
+    response = await _openFile(client, uri, 0);
+  }
+  if (response.statusCode == HttpStatus.ok) {
+    if (got != 0) {
+      _deletePart(rootPath, remote.path);
+      got = 0;
+    }
+  } else if (response.statusCode == HttpStatus.partialContent) {
+    final start = _contentRangeStart(
+      response.headers.value(HttpHeaders.contentRangeHeader),
+    );
+    if (start != got) {
+      await response.drain<void>();
+      _deletePart(rootPath, remote.path);
+      throw SyncInterrupted(remote.path, 0, remote.bytes);
+    }
+  } else {
+    final code = response.statusCode;
+    await response.drain<void>();
+    throw HttpException('sync $code $uri', uri: uri);
+  }
+  try {
+    got = await _writeBody(response, _partBin(rootPath, remote.path), got);
+  } catch (_) {
+    final have = _partLength(rootPath, remote.path);
+    _storePart(rootPath, remote, have);
+    throw SyncInterrupted(remote.path, have, remote.bytes);
+  }
+  if (got != remote.bytes) {
+    _storePart(rootPath, remote, got);
+    throw SyncInterrupted(remote.path, got, remote.bytes);
+  }
+  final part = _partBin(rootPath, remote.path);
+  final digest = (await part.openRead().transform(sha256).first).toString();
+  if (digest != remote.sha256) {
+    _deletePart(rootPath, remote.path);
+    throw const FileSystemException('sync hash does not match the manifest');
+  }
+  dest.parent.createSync(recursive: true);
+  part.renameSync(dest.path);
+  _deletePart(rootPath, remote.path);
+  dest.setLastModifiedSync(remote.mtimeUtc);
+}
+
+Future<HttpClientResponse> _openFile(
+  HttpClient client,
+  Uri uri,
+  int offset,
+) async {
+  final request = await client.getUrl(uri);
+  if (offset > 0) {
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$offset-');
+  }
+  return request.close();
+}
+
+Future<int> _writeBody(
+  HttpClientResponse response,
+  File part,
+  int start,
+) async {
+  part.parent.createSync(recursive: true);
+  final sink = part.openWrite(
+    mode: start == 0 ? FileMode.write : FileMode.append,
+  );
+  var got = start;
+  try {
+    await for (final chunk in response) {
+      sink.add(chunk);
+      got += chunk.length;
+    }
+  } finally {
+    await sink.flush();
+    await sink.close();
+  }
+  return got;
+}
+
+int? _contentRangeStart(String? header) {
+  if (header == null) return null;
+  final match = RegExp(r'^bytes (\d+)-').firstMatch(header.trim());
+  if (match == null) return null;
+  return int.parse(match.group(1)!);
+}
+
+String _partKey(String relative) =>
+    sha256.convert(utf8.encode(relative)).toString();
+
+Directory _partDir(String rootPath) =>
+    Directory(p.join(rootPath, '.fbv-sync-parts'));
+
+File _partBin(String rootPath, String relative) =>
+    File(p.join(_partDir(rootPath).path, '${_partKey(relative)}.bin'));
+
+File _partMeta(String rootPath, String relative) =>
+    File(p.join(_partDir(rootPath).path, '${_partKey(relative)}.json'));
+
+int _partLength(String rootPath, String relative) {
+  final bin = _partBin(rootPath, relative);
+  if (!bin.existsSync()) return 0;
+  return bin.lengthSync();
+}
+
+int _usablePart(String rootPath, SyncFile remote) {
+  final bin = _partBin(rootPath, remote.path);
+  final metaFile = _partMeta(rootPath, remote.path);
+  if (!bin.existsSync() || !metaFile.existsSync()) return 0;
+  try {
+    final decoded = jsonDecode(metaFile.readAsStringSync());
+    if (decoded is! Map) return 0;
+    if (decoded['path'] != remote.path ||
+        decoded['sha256'] != remote.sha256 ||
+        decoded['bytes'] != remote.bytes) {
+      return 0;
+    }
+    final got = decoded['got'];
+    if (got is! int || got <= 0 || got >= remote.bytes) return 0;
+    if (bin.lengthSync() != got) return 0;
+    return got;
+  } catch (_) {
+    return 0;
+  }
+}
+
+void _storePart(String rootPath, SyncFile remote, int got) {
+  final bin = _partBin(rootPath, remote.path);
+  if (got <= 0 || got >= remote.bytes || !bin.existsSync()) {
+    _deletePart(rootPath, remote.path);
+    return;
+  }
+  if (bin.lengthSync() != got) {
+    _deletePart(rootPath, remote.path);
+    return;
+  }
+  final meta = _partMeta(rootPath, remote.path);
+  meta.parent.createSync(recursive: true);
+  meta.writeAsStringSync(
+    const JsonEncoder.withIndent('  ').convert({
+      'path': remote.path,
+      'sha256': remote.sha256,
+      'bytes': remote.bytes,
+      'got': got,
+    }),
+  );
+}
+
+void _deletePart(String rootPath, String relative) {
+  final bin = _partBin(rootPath, relative);
+  final meta = _partMeta(rootPath, relative);
+  if (bin.existsSync()) bin.deleteSync();
+  if (meta.existsSync()) meta.deleteSync();
 }
 
 Future<String> _getText(HttpClient client, Uri uri) async {
@@ -283,14 +514,6 @@ Future<String> _getText(HttpClient client, Uri uri) async {
   return utf8.decode(
     await response.fold<List<int>>([], (a, b) => a..addAll(b)),
   );
-}
-
-Future<List<int>> _getBytes(HttpClient client, Uri uri) async {
-  final response = await (await client.getUrl(uri)).close();
-  if (response.statusCode != HttpStatus.ok) {
-    throw HttpException('sync ${response.statusCode} $uri', uri: uri);
-  }
-  return response.fold<List<int>>([], (a, b) => a..addAll(b));
 }
 
 void _addTree(List<SyncFile> files, String root, String relative) {
