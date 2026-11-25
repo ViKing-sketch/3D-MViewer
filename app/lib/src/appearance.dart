@@ -2,18 +2,42 @@ import 'package:flutter/material.dart';
 
 import 'strings.dart';
 
+enum ViewerTheme { light, dark, contrast }
+
+class ViewerThemeMark extends ThemeExtension<ViewerThemeMark> {
+  const ViewerThemeMark(this.name);
+
+  final String name;
+
+  @override
+  ViewerThemeMark copyWith({String? name}) =>
+      ViewerThemeMark(name ?? this.name);
+
+  @override
+  ViewerThemeMark lerp(ThemeExtension<ViewerThemeMark>? other, double t) =>
+      this;
+}
+
+ViewerTheme nextViewerTheme(ViewerTheme theme) {
+  return switch (theme) {
+    ViewerTheme.light => ViewerTheme.dark,
+    ViewerTheme.dark => ViewerTheme.contrast,
+    ViewerTheme.contrast => ViewerTheme.light,
+  };
+}
+
 class AppearanceScope extends InheritedWidget {
   const AppearanceScope({
     super.key,
     required this.strings,
-    required this.dark,
+    required this.theme,
     required this.onTheme,
     required this.onLanguage,
     required super.child,
   });
 
   final S strings;
-  final bool dark;
+  final ViewerTheme theme;
   final VoidCallback onTheme;
   final VoidCallback onLanguage;
 
@@ -24,7 +48,7 @@ class AppearanceScope extends InheritedWidget {
   @override
   bool updateShouldNotify(AppearanceScope oldWidget) {
     return strings.russian != oldWidget.strings.russian ||
-        dark != oldWidget.dark;
+        theme != oldWidget.theme;
   }
 }
 
@@ -45,7 +69,10 @@ class AppearanceMenu extends StatelessWidget {
         if (value == 'language') scope.onLanguage();
       },
       itemBuilder: (context) => [
-        PopupMenuItem(value: 'theme', child: Text(strings.theme)),
+        PopupMenuItem(
+          value: 'theme',
+          child: Text(strings.themeMode(scope.theme.name)),
+        ),
         PopupMenuItem(
           value: 'language',
           child: Text(strings.russian ? 'EN' : 'RU'),
