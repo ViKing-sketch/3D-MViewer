@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'appearance.dart';
 import 'csv_export.dart';
@@ -11,6 +12,8 @@ import 'geometry_method.dart';
 import 'package_import.dart';
 import 'filament_viewport.dart';
 import 'model.dart';
+import 'named_views.dart';
+import 'named_views_section.dart';
 import 'package_session.dart';
 import 'remarks.dart';
 import 'remarks_section.dart';
@@ -34,6 +37,7 @@ class _ModelPageState extends State<ModelPage>
     with SingleTickerProviderStateMixin {
   PackageSession? _session;
   RemarkStore? _remarks;
+  NamedViewStore? _views;
   List<SpatialNode> _spatial = const [];
   List<SystemInfo> _systems = const [];
   List<ElementInfo> _elements = const [];
@@ -95,6 +99,7 @@ class _ModelPageState extends State<ModelPage>
       _boxes = session.elementBoxes();
       _specs = session.specifications();
       _remarks = RemarkStore(widget.path)..load();
+      _views = NamedViewStore(widget.path)..load();
       _prepareGeometry(session);
     } catch (error) {
       _error = error.toString();
@@ -135,6 +140,7 @@ class _ModelPageState extends State<ModelPage>
         _boxes = session.elementBoxes();
         _specs = session.specifications();
         _remarks = RemarkStore(widget.path)..load();
+        _views = NamedViewStore(widget.path)..load();
         _opening = false;
         _prepareGeometry(session);
       });
@@ -426,7 +432,16 @@ class _ModelPageState extends State<ModelPage>
     unawaited(view.setWalkAxes(axes));
   }
 
-  Future<RemarkViewpoint> _captureViewpoint(ElementInfo element) async {
+  Future<RemarkViewpoint> _captureViewpoint(ElementInfo element) {
+    return _captureScene(preferBoxId: element.id);
+  }
+
+  /// Camera, filters, hidden and isolated ids, and the one section plane.
+  ///
+  /// A live Filament pose wins. Without a platform view the fallback is the
+  /// walk pose, or a frame on one element box. That fallback is not the orbit
+  /// gesture.
+  Future<RemarkViewpoint> _captureScene({int? preferBoxId}) async {
     final camera = await _viewport.currentState?.commands?.cameraPose();
     final origin = localOriginOf(_session?.manifest ?? const {});
     if (camera != null) {
@@ -442,9 +457,12 @@ class _ModelPageState extends State<ModelPage>
         isolated: _isolated.toList(),
       );
     }
+    final boxId = preferBoxId ?? _selectedId;
     ElementBox? box;
-    for (final item in _boxes) {
-      if (item.id == element.id && !item.degenerate) box = item;
+    if (boxId != null) {
+      for (final item in _boxes) {
+        if (item.id == boxId && !item.degenerate) box = item;
+      }
     }
     return fallbackViewpoint(
       walk: _walking ? _walkPose : null,
@@ -457,6 +475,98 @@ class _ModelPageState extends State<ModelPage>
       section: _section,
       hidden: _hidden.toList(),
       isolated: _isolated.toList(),
+    );
+  }
+
+  void _applyNamedView(NamedView saved) {
+    if (_walking) {
+      unawaited(
+        _viewport.currentState?.setWalkAxes(WalkAxes.zero) ?? Future.value(),
+      );
+    }
+    final view = saved.viewpoint;
+    setState(() {
+      _filter = SceneFilter(
+        storeyId: view.storeyId,
+        ifcClass: view.ifcClass,
+        material: view.material,
+        systemId: view.systemId,
+      );
+      _section = view.section;
+      _hidden
+        ..clear()
+        ..addAll(view.hidden);
+      _isolated
+        ..clear()
+        ..addAll(view.isolated);
+      _xray = saved.xray;
+      _query = '';
+      _searchIds = null;
+      _walking = false;
+      final selected = _selectedId;
+      if (selected != null && !_keptAfterView(selected)) {
+        _selectedId = null;
+      }
+      _renderRevision++;
+    });
+    final pose = view.filament;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      try {
+        await _viewport.currentState?.commands?.setViewpoint(
+          eye: pose.eye,
+          target: pose.target,
+        );
+      } on MissingPluginException {
+        // The desktop slot has no Filament camera.
+      } on PlatformException {
+        // The native view rejected the pose.
+      }
+    });
+  }
+
+  bool _keptAfterView(int id) {
+    if (_hidden.contains(id)) return false;
+    if (_isolated.isNotEmpty && !_isolated.contains(id)) return false;
+    for (final element in _elements) {
+      if (element.id == id) return _filter.matches(element);
+    }
+    return false;
+  }
+
+  Future<void> _openSavedViews() async {
+    final store = _views;
+    if (store == null || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          scrollable: true,
+          title: Text(widget.strings.savedViews),
+          content: SizedBox(
+            width: 420,
+            child: NamedViewsSection(
+              strings: widget.strings,
+              store: store,
+              xray: _xray,
+              capture: _captureScene,
+              onOpen: (view) {
+                Navigator.pop(dialogContext);
+                _applyNamedView(view);
+              },
+              onChanged: () {
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(widget.strings.cancel),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -678,6 +788,10 @@ class _ModelPageState extends State<ModelPage>
                   ),
                   PopupMenuItem(value: 'hide', child: Text(strings.hide)),
                   PopupMenuItem(value: 'show', child: Text(strings.showAll)),
+                  PopupMenuItem(
+                    value: 'saved-views',
+                    child: Text(strings.savedViews),
+                  ),
                   PopupMenuItem(value: 'front', child: Text(strings.viewFront)),
                   PopupMenuItem(value: 'back', child: Text(strings.viewBack)),
                   PopupMenuItem(value: 'left', child: Text(strings.viewLeft)),
@@ -710,6 +824,8 @@ class _ModelPageState extends State<ModelPage>
       _hideSelected();
     } else if (value == 'show') {
       _showAll();
+    } else if (value == 'saved-views') {
+      unawaited(_openSavedViews());
     } else {
       _stopWalk();
       view?.setCamera(value);

@@ -109,6 +109,19 @@ class S {
   String get viewBottom => russian ? 'Снизу' : 'Bottom';
   String get cameraViews => russian ? 'Виды' : 'Views';
   String get cameraHome => russian ? 'Камера по умолчанию' : 'Default camera';
+  String get savedViews => russian ? 'Сохранённые виды' : 'Saved views';
+  String get savedViewsHint => russian
+      ? 'Камера, видимость и одна плоскость среза. Файл лежит рядом с пакетом: не внутри него и не в замечании. Открытие возвращает орбиту.'
+      : 'Camera, visibility and one section plane. The file sits beside the package: not inside it and not in a remark. Opening returns to orbit.';
+  String get savedViewName => russian ? 'Имя вида' : 'View name';
+  String get saveView => russian ? 'Сохранить вид' : 'Save view';
+  String get noSavedViews =>
+      russian ? 'Сохранённых видов нет' : 'No saved views';
+  String get savedViewEmpty =>
+      russian ? 'Введите имя вида' : 'Enter a view name';
+  String get savedViewLong => russian
+      ? 'Имя вида длиннее 80 знаков'
+      : 'The view name is longer than 80 characters';
   String get walk => russian ? 'По этажу' : 'Walk';
   String get walkStop => russian ? 'Орбита' : 'Orbit';
   String get walkMove => russian ? 'Ходьба' : 'Move';
