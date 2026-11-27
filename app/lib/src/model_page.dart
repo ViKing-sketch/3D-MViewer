@@ -18,6 +18,7 @@ import 'package_session.dart';
 import 'remarks.dart';
 import 'remarks_section.dart';
 import 'strings.dart';
+import 'tile_load.dart';
 import 'visibility.dart';
 import 'walk_pose.dart';
 import 'walk_stick.dart';
@@ -41,6 +42,8 @@ class _ModelPageState extends State<ModelPage>
   List<SpatialNode> _spatial = const [];
   List<SystemInfo> _systems = const [];
   List<ElementInfo> _elements = const [];
+  List<TileInfo> _tiles = const [];
+  String? _discipline;
   List<ElementBox> _boxes = const [];
   List<SpecRow> _specs = const [];
   String? _error;
@@ -96,6 +99,7 @@ class _ModelPageState extends State<ModelPage>
       _spatial = session.spatial();
       _systems = session.systems();
       _elements = session.elements();
+      _tiles = session.tiles();
       _boxes = session.elementBoxes();
       _specs = session.specifications();
       _remarks = RemarkStore(widget.path)..load();
@@ -137,6 +141,7 @@ class _ModelPageState extends State<ModelPage>
         _spatial = session.spatial();
         _systems = session.systems();
         _elements = session.elements();
+        _tiles = session.tiles();
         _boxes = session.elementBoxes();
         _specs = session.specifications();
         _remarks = RemarkStore(widget.path)..load();
@@ -300,6 +305,7 @@ class _ModelPageState extends State<ModelPage>
       _hidden.clear();
       _isolated.clear();
       _filter = const SceneFilter();
+      _discipline = null;
       _query = '';
       _searchIds = null;
       _xray = false;
@@ -1201,9 +1207,36 @@ class _ModelPageState extends State<ModelPage>
     final storeys = storeysOf(_spatial);
     final classes = {..._elements.map((e) => e.ifcClass)}.toList()..sort();
     final materials = materialsOf(_elements);
+    final sceneTile = activeTile(
+      tiles: _tiles,
+      storeyId: _filter.storeyId,
+      discipline: _discipline,
+    );
+    final disciplines = tileDisciplines(
+      tiles: _tiles,
+      storeyId: _filter.storeyId,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (disciplines.isNotEmpty)
+          _chipStrip([
+            for (final name in disciplines)
+              _filterChip(
+                key: ValueKey(
+                  name.isEmpty ? 'discipline-none' : 'discipline-$name',
+                ),
+                label: strings.disciplineLabel(name),
+                selected: sceneTile?.discipline == name,
+                onSelected: () {
+                  setState(() {
+                    _discipline = name;
+                    _fitToken++;
+                  });
+                  refresh?.call();
+                },
+              ),
+          ]),
         if (storeys.isNotEmpty)
           _chipStrip([
             _filterChip(
@@ -1603,10 +1636,17 @@ class _ModelPageState extends State<ModelPage>
   }
 
   Widget _viewportOf(ElementInfo? selected) {
+    final sceneTile = activeTile(
+      tiles: _tiles,
+      storeyId: _filter.storeyId,
+      discipline: _discipline,
+    );
     return FilamentViewport(
       key: _viewport,
       strings: widget.strings,
       rootPath: _session?.rootPath,
+      tileKey: sceneTile == null ? '' : 'tile-${sceneTile.tileId}',
+      tileElements: sceneTile?.elementIds,
       elementCount: _elements.length,
       selectedName: selected?.name,
       selectedId: _selectedId,

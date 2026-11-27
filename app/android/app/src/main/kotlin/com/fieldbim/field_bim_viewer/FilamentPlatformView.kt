@@ -194,6 +194,9 @@ class FilamentPlatformView(
     private var downY = 0f
     private var pointerMoved = false
     @Volatile private var loadingRoot: String? = null
+
+    /** Empty when the whole model is loaded. A tile id list otherwise. */
+    @Volatile private var loadingTile: String = ""
     @Volatile private var status: Map<String, Any?> = mapOf("code" to "idle")
     private var reportedReady = false
     private var sceneArmed = false
@@ -253,7 +256,7 @@ class FilamentPlatformView(
         channel.setMethodCallHandler(this)
         choreographer.postFrameCallback(frameCallback)
         val root = (args as? Map<*, *>)?.get("root") as? String
-        if (!root.isNullOrEmpty()) load(root)
+        if (!root.isNullOrEmpty()) load(root, null)
     }
 
     override fun getView() = surfaceView
@@ -345,7 +348,13 @@ class FilamentPlatformView(
             "sync" -> result.success(status)
             "load" -> {
                 val root = call.argument<String>("root")
-                if (!root.isNullOrEmpty()) load(root)
+                val listed = call.argument<List<*>>("elements")
+                val allow = if (listed == null) {
+                    null
+                } else {
+                    listed.mapNotNull { (it as? Number)?.toLong() }.toSet()
+                }
+                if (!root.isNullOrEmpty()) load(root, allow)
                 result.success(null)
             }
             "release" -> releaseScene(result)
@@ -502,6 +511,7 @@ class FilamentPlatformView(
     private fun releaseScene(result: MethodChannel.Result) {
         generation.incrementAndGet()
         loadingRoot = null
+        loadingTile = ""
         Log.i(TAG, "cancel requested")
         renderHandler.post {
             try {
@@ -520,12 +530,17 @@ class FilamentPlatformView(
         }
     }
 
-    private fun load(root: String) {
+    private fun load(root: String, allow: Set<Long>?) {
         if (destroyed) return
-        if (loadingRoot == root) {
+        val tileKey = allow?.sorted()?.joinToString(",") ?: ""
+        if (loadingRoot == root && loadingTile == tileKey) {
             val ticket = generation.get()
             renderHandler.post {
-                if (destroyed || loadingRoot != root || ticket != generation.get()) return@post
+                if (destroyed || loadingRoot != root || loadingTile != tileKey ||
+                    ticket != generation.get()
+                ) {
+                    return@post
+                }
                 val reload = reportedReady
                 resetViewerState()
                 if (reload) {
@@ -536,6 +551,7 @@ class FilamentPlatformView(
             return
         }
         loadingRoot = root
+        loadingTile = tileKey
         val ticket = generation.incrementAndGet()
         setStatus(mapOf("code" to "loading", "loaded" to 0, "total" to 0))
         renderHandler.post {
@@ -547,7 +563,7 @@ class FilamentPlatformView(
         }
         Thread {
             try {
-                val plan = plan(File(root), ticket)
+                val plan = plan(File(root), ticket, allow)
                 renderHandler.post {
                     if (!destroyed && ticket == generation.get() && loadingRoot == root) begin(plan)
                 }
@@ -572,7 +588,7 @@ class FilamentPlatformView(
         return if (info.totalMem <= threeGiB) 96L * 1024 * 1024 else 256L * 1024 * 1024
     }
 
-    private fun plan(root: File, ticket: Int): LoadPlan {
+    private fun plan(root: File, ticket: Int, allow: Set<Long>?): LoadPlan {
         fun live() {
             if (destroyed || ticket != generation.get()) throw CancelledLoad()
         }
@@ -580,11 +596,13 @@ class FilamentPlatformView(
         val budget = deviceBudget()
         val lod0 = File(root, "mesh/lod0.glb")
         val lod0Bytes = if (lod0.isFile) lod0.length() else 0L
-        val useLod0 = lod0.isFile && lod0Bytes <= budget
+        // A tile is one storey × discipline. Its element files are the scene.
+        // lod0 is the whole model, so it stays out of a tiled load.
+        val useLod0 = allow == null && lod0.isFile && lod0Bytes <= budget
         val geomsZ = HashMap<Long, ElementGeom>()
         val geomsU = HashMap<Long, ElementGeom>()
         val lod0Ids = HashSet<Long>()
-        if (lod0.isFile) {
+        if (allow == null && lod0.isFile) {
             for (geom in readGeoms(lod0)) {
                 geomsZ[geom.id] = geom
                 geomsU[geom.id] = geom.upright()
@@ -592,9 +610,10 @@ class FilamentPlatformView(
             }
         }
         val elementDir = File(root, "mesh/elements")
-        val elementGlbs = elementDir.listFiles { file ->
+        val listed = elementDir.listFiles { file ->
             file.isFile && file.name.endsWith(".glb")
         }?.toList() ?: emptyList()
+        val elementGlbs = TileFiles.matching(listed, allow)
         val elems = ArrayList<ElementFile>()
         for (file in elementGlbs) {
             live()
@@ -651,12 +670,13 @@ class FilamentPlatformView(
         live()
         val standIn = proxyIds.toSet()
         val inward = LinkedHashSet<Long>()
-        if (lod0.isFile) noteWinding(lod0, inward)
+        if (allow == null && lod0.isFile) noteWinding(lod0, inward)
         for (file in elementGlbs) noteWinding(file, inward)
         val span = SceneBounds.span(SceneBounds.union(geomsZ.values, standIn))
         // Records keep the full element bounds so a selected stand-in is framed
         // to the mesh, not to the clamped orange box.
-        val heavy = geomsZ.size > 80 || (lod0.isFile && lod0Bytes >= 8L * 1024 * 1024)
+        val heavy = geomsZ.size > 80 ||
+            (allow == null && lod0.isFile && lod0Bytes >= 8L * 1024 * 1024)
         val previewGeoms = ArrayList<ElementGeom>()
         if (heavy) {
             for (geom in geomsZ.values) {
@@ -671,8 +691,10 @@ class FilamentPlatformView(
         live()
         val preview = ProxyBoxes.build(previewGeoms)
         val proxy = ProxyBoxes.build(standGeoms)
-        val partial = (lod0.isFile && !useLod0) || standIn.isNotEmpty()
-        if (gpu.isEmpty() && proxy == null && preview == null) error("mesh/lod0.glb was not found")
+        val partial = (allow == null && lod0.isFile && !useLod0) || standIn.isNotEmpty()
+        if (gpu.isEmpty() && proxy == null && preview == null && allow == null) {
+            error("mesh/lod0.glb was not found")
+        }
         live()
         Log.i(
             TAG,

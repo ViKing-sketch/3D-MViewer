@@ -20,8 +20,13 @@ class FilamentCommands {
     return null;
   }
 
-  Future<void> load(String root) {
-    return channel.invokeMethod<void>('load', {'root': root});
+  /// [elements] null loads the whole model. A list, including an empty one,
+  /// streams only those element files. That is one storey × discipline tile.
+  Future<void> load(String root, {List<int>? elements}) {
+    return channel.invokeMethod<void>('load', {
+      'root': root,
+      'elements': ?elements,
+    });
   }
 
   /// Drops the GPU scene, mapped files and the in-flight upload. The engine
