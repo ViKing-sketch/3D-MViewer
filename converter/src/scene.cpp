@@ -926,46 +926,51 @@ Scene build_scene(const IfcFile& file, const ConvertOptions& options, const std:
   }
 
   bool analytic_used = false;
+  const int element_count = static_cast<int>(scene.elements.size());
+  const int steps = element_count + 1;
+  int meshed = 0;
   for (Element& element : scene.elements) {
-    if (element.has_mesh) continue;
-    if (!element.has_representation) {
+    if (!element.has_mesh && !element.has_representation) {
       std::ostringstream line;
       line << "element " << element.ifc_class << " '" << element.name << "' " << element.guid
            << " has no representation";
       add_warning(scene, "no_representation", line.str());
       remember_failure(scene, element, "no_representation", "has no representation");
       ++scene.without_geometry;
-      continue;
-    }
-    const IfcEntity* product = file.find(element.ifc_id);
-    std::string why;
-    if (product != nullptr && mesh_product(file, *product, scene.length_scale, element.mesh, why)) {
-      element.has_mesh = true;
-      element.mesh_source = "analytic-extrusion-v1";
-      element.geometry_failure.clear();
-      element.failure_reason.clear();
-      commit_mesh(scene, element, options);
-      analytic_used = true;
-      scene.notes.push_back("fallback: " + element.guid + " " + element.ifc_class +
-                            " meshed by analytic-extrusion");
-    } else {
-      std::string detail = element.geometry_failure;
-      if (!why.empty()) {
-        if (!detail.empty())
-          detail += "; analytic: " + why;
-        else
-          detail = why;
+    } else if (!element.has_mesh) {
+      const IfcEntity* product = file.find(element.ifc_id);
+      std::string why;
+      if (product != nullptr &&
+          mesh_product(file, *product, scene.length_scale, element.mesh, why)) {
+        element.has_mesh = true;
+        element.mesh_source = "analytic-extrusion-v1";
+        element.geometry_failure.clear();
+        element.failure_reason.clear();
+        commit_mesh(scene, element, options);
+        analytic_used = true;
+        scene.notes.push_back("fallback: " + element.guid + " " + element.ifc_class +
+                              " meshed by analytic-extrusion");
+      } else {
+        std::string detail = element.geometry_failure;
+        if (!why.empty()) {
+          if (!detail.empty())
+            detail += "; analytic: " + why;
+          else
+            detail = why;
+        }
+        if (detail.empty()) detail = "no supported solid";
+        const std::string code = classify_geometry_failure(detail);
+        std::ostringstream line;
+        line << "failed: " << element.ifc_class << " '" << element.name << "' " << element.guid
+             << ": " << detail;
+        add_warning(scene, code, line.str());
+        remember_failure(scene, element, code, detail);
+        element.failure_reason = code;
+        ++scene.failed;
       }
-      if (detail.empty()) detail = "no supported solid";
-      const std::string code = classify_geometry_failure(detail);
-      std::ostringstream line;
-      line << "failed: " << element.ifc_class << " '" << element.name << "' " << element.guid
-           << ": " << detail;
-      add_warning(scene, code, line.str());
-      remember_failure(scene, element, code, detail);
-      element.failure_reason = code;
-      ++scene.failed;
     }
+    ++meshed;
+    if (options.progress) options.progress(meshed, steps);
   }
   if (scene.ifcopenshell_ran && analytic_used)
     scene.mesh_generator = "ifcopenshell-occt+analytic-extrusion-v1";

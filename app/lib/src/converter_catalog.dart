@@ -77,8 +77,8 @@ String outputDirectoryFor(String ifcPath) {
   );
 }
 
-/// `FBV_PROGRESS <done> <total>` from fbvconv. [total] is a stage count,
-/// not a count of elements.
+/// `FBV_PROGRESS <done> <total>` from fbvconv.
+/// [total] is the element count plus one. The last step writes the package.
 class StageProgress {
   const StageProgress(this.done, this.total);
 

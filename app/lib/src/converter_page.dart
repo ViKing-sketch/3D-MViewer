@@ -180,7 +180,10 @@ class ConverterPageState extends State<ConverterPage> {
                 child: Text(
                   _progress == null
                       ? strings.converterRunning
-                      : '${strings.converterRunning} ${_progress!.done}/${_progress!.total}',
+                      : strings.converterPercent(
+                          _progress!.done,
+                          _progress!.total,
+                        ),
                 ),
               ),
             ),
