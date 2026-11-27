@@ -49,6 +49,10 @@ class S {
       : 'Offline. This app does not use the network.';
   String get allClasses => russian ? 'Все классы' : 'All classes';
   String get allStoreys => russian ? 'Все этажи' : 'All storeys';
+  String get allDisciplines => russian ? 'Все разделы' : 'All disciplines';
+  String tilesOmitted(int count) => russian
+      ? 'В сцену вошли не все этажи: ещё $count не влезли в память. Выберите этаж.'
+      : 'Not every storey fits in memory ($count left out). Choose a storey.';
 
   /// Discipline keys written into a tile. An empty key is the bucket with none.
   String disciplineLabel(String key) {
