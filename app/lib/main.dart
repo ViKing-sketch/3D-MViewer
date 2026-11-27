@@ -6,6 +6,7 @@ import 'src/appearance.dart';
 import 'src/library_page.dart';
 import 'src/model_page.dart';
 import 'src/package_import.dart';
+import 'src/server_link.dart';
 import 'src/sqlite_setup.dart';
 import 'src/strings.dart';
 
@@ -20,11 +21,15 @@ class FieldBimApp extends StatefulWidget {
     super.key,
     this.autoOpenPath,
     this.initialLibrary,
+    this.initialConnectLink,
+    this.tokenStore,
     this.russian = true,
   });
 
   final String? autoOpenPath;
   final String? initialLibrary;
+  final String? initialConnectLink;
+  final TokenStore? tokenStore;
   final bool russian;
 
   @override
@@ -103,6 +108,8 @@ class _FieldBimAppState extends State<FieldBimApp> {
               key: _library,
               strings: strings,
               initialDirectory: widget.initialLibrary,
+              initialConnectLink: widget.initialConnectLink,
+              tokenStore: widget.tokenStore,
             ),
     );
   }

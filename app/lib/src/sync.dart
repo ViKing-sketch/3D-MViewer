@@ -76,12 +76,28 @@ class SyncManifest {
 /// A path with `..`, a leading slash, a backslash or an empty segment is
 /// rejected. The address is a setting: loopback for a peer on this machine,
 /// or the corporate base URL. There is no account and no third-party host.
+///
+/// An optional `Authorization: Bearer` token is checked only when the server
+/// was started with one. The token is not written into `.fbv-sync.json`.
 const syncProtocol = 'fbv-sync-1';
 
 class SyncSettings {
-  const SyncSettings({this.serverUrl = ''});
+  const SyncSettings({
+    this.serverUrl = '',
+    this.setup = '',
+    this.serverPackages = const [],
+  });
 
   final String serverUrl;
+
+  /// `local`, `server`, or empty when the first-run choice is still open.
+  ///
+  /// A file written before this field existed, with only `server_url`, loads
+  /// as `server`.
+  final String setup;
+
+  /// Library-relative package names last seen on the server.
+  final List<String> serverPackages;
 
   static File fileIn(String libraryRoot) =>
       File(p.join(libraryRoot, '.fbv-sync.json'));
@@ -93,7 +109,25 @@ class SyncSettings {
       final decoded = jsonDecode(file.readAsStringSync());
       if (decoded is! Map) return const SyncSettings();
       final url = decoded['server_url'];
-      return SyncSettings(serverUrl: url is String ? url : '');
+      final serverUrl = url is String ? url : '';
+      final setupRaw = decoded['setup'];
+      var setup = setupRaw is String ? setupRaw : '';
+      if (setup != 'local' && setup != 'server') setup = '';
+      if (setup.isEmpty && serverUrl.isNotEmpty) setup = 'server';
+      final listed = decoded['server_packages'];
+      final packages = <String>[];
+      if (listed is List) {
+        for (final item in listed) {
+          if (item is String && syncPathAllowed(item) && !item.contains('/')) {
+            packages.add(item);
+          }
+        }
+      }
+      return SyncSettings(
+        serverUrl: serverUrl,
+        setup: setup,
+        serverPackages: packages,
+      );
     } catch (_) {
       return const SyncSettings();
     }
@@ -103,7 +137,11 @@ class SyncSettings {
     final file = fileIn(libraryRoot);
     file.parent.createSync(recursive: true);
     file.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert({'server_url': serverUrl}),
+      const JsonEncoder.withIndent('  ').convert({
+        'server_url': serverUrl,
+        'setup': setup,
+        'server_packages': serverPackages,
+      }),
     );
   }
 }
@@ -151,10 +189,40 @@ SyncManifest syncCatalog(String rootPath) {
 }
 
 class SyncPull {
-  const SyncPull({required this.copied, required this.kept});
+  const SyncPull({
+    required this.copied,
+    required this.kept,
+    this.packages = const [],
+  });
 
   final int copied;
   final int kept;
+
+  /// Package file or directory names listed by the manifest.
+  final List<String> packages;
+}
+
+/// The server expected a bearer token and this request did not match.
+class SyncAccessRevoked implements Exception {
+  const SyncAccessRevoked();
+
+  @override
+  String toString() => 'sync access revoked';
+}
+
+/// Top-level package names in a manifest. Sidecars are not names.
+List<String> syncPackageNames(SyncManifest manifest) {
+  final names = <String>{};
+  for (final file in manifest.files) {
+    final slash = file.path.indexOf('/');
+    if (slash > 0) {
+      names.add(file.path.substring(0, slash));
+    } else if (file.path.toLowerCase().endsWith('.fbvpkg')) {
+      names.add(file.path);
+    }
+  }
+  final listed = names.toList()..sort();
+  return listed;
 }
 
 /// The transfer stopped before the manifest length was on disk.
@@ -189,19 +257,26 @@ class SyncServer {
   /// absent. Tests read this. A listener does not.
   final List<String?> requestRanges = [];
 
+  /// When set, every request must send `Authorization: Bearer` with this
+  /// exact value. The in-app listener leaves it null.
+  String? expectedToken;
+
   Uri get base => Uri.parse('http://${server.address.host}:${server.port}');
 
   static Future<SyncServer> start(
     String rootPath, {
     InternetAddress? address,
+    int port = 0,
+    String? expectedToken,
   }) async {
     final root = Directory(rootPath);
     if (!root.existsSync()) root.createSync(recursive: true);
     final bound = await HttpServer.bind(
       address ?? InternetAddress.loopbackIPv4,
-      0,
+      port,
     );
     final endpoint = SyncServer._(bound, root.absolute.path);
+    endpoint.expectedToken = expectedToken;
     bound.listen(endpoint._handle);
     return endpoint;
   }
@@ -210,6 +285,14 @@ class SyncServer {
 
   Future<void> _handle(HttpRequest request) async {
     try {
+      final expected = expectedToken;
+      if (expected != null && expected.isNotEmpty) {
+        final header = request.headers.value(HttpHeaders.authorizationHeader);
+        if (header != 'Bearer $expected') {
+          request.response.statusCode = HttpStatus.unauthorized;
+          return;
+        }
+      }
       final path = request.uri.path;
       if (request.method != 'GET') {
         request.response.statusCode = HttpStatus.methodNotAllowed;
@@ -299,14 +382,18 @@ class SyncServer {
   return (start: start, end: last + 1);
 }
 
-Future<SyncPull> pullLibrary(String rootPath, Uri base) async {
+Future<SyncPull> pullLibrary(
+  String rootPath,
+  Uri base, {
+  String token = '',
+}) async {
   final root = Directory(rootPath);
   root.createSync(recursive: true);
   final manifestUri = base.replace(path: '/fbv-sync/manifest', query: '');
   final client = HttpClient();
   try {
     final manifest = SyncManifest.fromJson(
-      jsonDecode(await _getText(client, manifestUri)),
+      jsonDecode(await _getText(client, manifestUri, token)),
     );
     final local = {
       for (final file in syncCatalog(rootPath).files) file.path: file,
@@ -323,10 +410,14 @@ Future<SyncPull> pullLibrary(String rootPath, Uri base) async {
         kept += 1;
         continue;
       }
-      await _resumeFile(client, root.path, base, remote);
+      await _resumeFile(client, root.path, base, remote, token);
       copied += 1;
     }
-    return SyncPull(copied: copied, kept: kept);
+    return SyncPull(
+      copied: copied,
+      kept: kept,
+      packages: syncPackageNames(manifest),
+    );
   } finally {
     client.close(force: true);
   }
@@ -337,6 +428,7 @@ Future<void> _resumeFile(
   String rootPath,
   Uri base,
   SyncFile remote,
+  String token,
 ) async {
   final root = Directory(rootPath);
   final dest = File(p.join(root.path, remote.path));
@@ -348,12 +440,22 @@ Future<void> _resumeFile(
     queryParameters: {'path': remote.path},
   );
   var got = _usablePart(rootPath, remote);
-  var response = await _openFile(client, uri, got);
+  var response = await _openFile(client, uri, got, token);
+  if (response.statusCode == HttpStatus.unauthorized ||
+      response.statusCode == HttpStatus.forbidden) {
+    await response.drain<void>();
+    throw const SyncAccessRevoked();
+  }
   if (response.statusCode == HttpStatus.requestedRangeNotSatisfiable) {
     await response.drain<void>();
     _deletePart(rootPath, remote.path);
     got = 0;
-    response = await _openFile(client, uri, 0);
+    response = await _openFile(client, uri, 0, token);
+    if (response.statusCode == HttpStatus.unauthorized ||
+        response.statusCode == HttpStatus.forbidden) {
+      await response.drain<void>();
+      throw const SyncAccessRevoked();
+    }
   }
   if (response.statusCode == HttpStatus.ok) {
     if (got != 0) {
@@ -397,12 +499,19 @@ Future<void> _resumeFile(
   dest.setLastModifiedSync(remote.mtimeUtc);
 }
 
+void _authorize(HttpClientRequest request, String token) {
+  if (token.isEmpty) return;
+  request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+}
+
 Future<HttpClientResponse> _openFile(
   HttpClient client,
   Uri uri,
   int offset,
+  String token,
 ) async {
   final request = await client.getUrl(uri);
+  _authorize(request, token);
   if (offset > 0) {
     request.headers.set(HttpHeaders.rangeHeader, 'bytes=$offset-');
   }
@@ -506,8 +615,15 @@ void _deletePart(String rootPath, String relative) {
   if (meta.existsSync()) meta.deleteSync();
 }
 
-Future<String> _getText(HttpClient client, Uri uri) async {
-  final response = await (await client.getUrl(uri)).close();
+Future<String> _getText(HttpClient client, Uri uri, String token) async {
+  final request = await client.getUrl(uri);
+  _authorize(request, token);
+  final response = await request.close();
+  if (response.statusCode == HttpStatus.unauthorized ||
+      response.statusCode == HttpStatus.forbidden) {
+    await response.drain<void>();
+    throw const SyncAccessRevoked();
+  }
   if (response.statusCode != HttpStatus.ok) {
     throw HttpException('sync ${response.statusCode} $uri', uri: uri);
   }

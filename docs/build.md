@@ -13,6 +13,7 @@
 * [Матрица требований](requirements_matrix.md)
 * [Очередь приоритетов](priority_plan.md)
 * [Синхронизация fbv-sync-1](sync.md)
+* [Проверка сервера по Wi-Fi](server_connect_test.md)
 * [Тестовый APK пробы OCCT](occt_probe_apk.md)
 * [Проба OCCT в просмотрщике](viewer_occt.md)
 * [План Filament](rendering.md)

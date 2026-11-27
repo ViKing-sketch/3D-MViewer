@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:field_bim_viewer/main.dart';
+import 'package:field_bim_viewer/src/server_link.dart';
 import 'package:field_bim_viewer/src/sync.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -219,23 +220,39 @@ void main() {
     final server = await SyncServer.start(source.path);
     server.responseByteLimit = 6;
 
-    await tester.pumpWidget(FieldBimApp(initialLibrary: dest.path));
+    await tester.pumpWidget(
+      FieldBimApp(initialLibrary: dest.path, tokenStore: MemoryTokenStore()),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Подключиться к серверу организации'));
+    await tester.pump();
+    await tester.tap(find.text('Дополнительно'));
     await tester.pump();
     await tester.enterText(
-      find.byKey(const Key('sync-url')),
+      find.byKey(const Key('server-address')),
       server.base.toString(),
     );
-    await tester.tap(find.text('Забрать'));
+    await tester.tap(find.text('Подключить'));
     await _until(tester, find.textContaining('Обрыв'));
     expect(local.readAsBytesSync(), [1, 2, 3]);
     expect(
       find.textContaining('wall.fbvpkg, получено 6 из 24'),
       findsOneWidget,
     );
+    expect(find.textContaining('Connection refused'), findsNothing);
 
     server.responseByteLimit = null;
-    await tester.tap(find.text('Забрать'));
-    await _until(tester, find.textContaining('скопировано 1'));
+    await tester.tap(find.text('Повторить'));
+    for (var i = 0; i < 40; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+      if (find.textContaining('Обрыв').evaluate().isEmpty &&
+          _sameBytes(local.readAsBytesSync(), payload)) {
+        break;
+      }
+    }
     expect(local.readAsBytesSync(), payload);
     expect(server.requestRanges, contains('bytes=6-'));
     await tester.runAsync(server.close);
@@ -270,6 +287,14 @@ Future<void> _until(WidgetTester tester, Finder finder) async {
     if (finder.evaluate().isNotEmpty) return;
   }
   fail('timed out waiting for $finder');
+}
+
+bool _sameBytes(List<int> left, List<int> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
 }
 
 class _PassthroughHttp extends HttpOverrides {}
