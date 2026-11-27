@@ -9,6 +9,9 @@ import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     private var bridge: ImportBridge? = null
+    private var connectChannel: MethodChannel? = null
+    private var pendingLink: String? = null
+    private var scanResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -16,15 +19,37 @@ class MainActivity : FlutterActivity() {
             "fbv/filament",
             FilamentViewFactory(flutterEngine.dartExecutor.binaryMessenger),
         )
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        TokenBridge(this, messenger).attach()
+        connectChannel = MethodChannel(messenger, "fbv/connect")
+        connectChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "take" -> {
+                    val link = pendingLink
+                    pendingLink = null
+                    result.success(link)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(messenger, "fbv/qr").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "scan" -> {
+                    val title = call.argument<String>("title") ?: "QR"
+                    startScan(title, result)
+                }
+                else -> result.notImplemented()
+            }
+        }
         val imported = ImportBridge(
             this,
-            flutterEngine.dartExecutor.binaryMessenger,
+            messenger,
             ::launchPicker,
             ::launchSave,
         )
         imported.attach()
         bridge = imported
-        imported.consume(intent)
+        if (!deliverConnect(intent, notify = false)) imported.consume(intent)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fbv/occt")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -49,15 +74,48 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        bridge?.consume(intent)
+        if (!deliverConnect(intent, notify = true)) bridge?.consume(intent)
     }
 
     @Deprecated("AndroidX Activity Result is unavailable on FlutterActivity")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SCAN_QR) {
+            val pending = scanResult
+            scanResult = null
+            val link = if (resultCode == RESULT_OK) data?.getStringExtra("link") else null
+            pending?.success(link)
+            return
+        }
         val uri: Uri? = if (resultCode == RESULT_OK) data?.data else null
         if (requestCode == OPEN_PACKAGE) bridge?.onPicked(uri)
         if (requestCode == SAVE_CSV) bridge?.onSavePicked(uri)
+    }
+
+    private fun deliverConnect(intent: Intent?, notify: Boolean): Boolean {
+        if (intent == null) return false
+        val data = intent.data ?: return false
+        if (data.scheme != "fbv" || data.host != "connect") return false
+        val link = data.toString()
+        intent.data = null
+        intent.action = null
+        if (notify) {
+            connectChannel?.invokeMethod("onLink", link)
+        } else {
+            pendingLink = link
+        }
+        return true
+    }
+
+    private fun startScan(title: String, result: MethodChannel.Result) {
+        if (scanResult != null) {
+            result.error("busy", "scan already in progress", null)
+            return
+        }
+        scanResult = result
+        val scan = Intent(this, QrScanActivity::class.java).putExtra("title", title)
+        @Suppress("DEPRECATION")
+        startActivityForResult(scan, SCAN_QR)
     }
 
     private fun launchSave(name: String) {
@@ -84,5 +142,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val OPEN_PACKAGE = 0xFB71
         private const val SAVE_CSV = 0xFB72
+        private const val SCAN_QR = 0xFB73
     }
 }

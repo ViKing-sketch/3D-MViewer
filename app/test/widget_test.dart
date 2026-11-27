@@ -155,6 +155,9 @@ void main() {
     expect(copied.exitCode, 0, reason: copied.stderr.toString());
 
     await tester.pumpWidget(FieldBimApp(initialLibrary: library.path));
+    await tester.pump();
+    await tester.tap(find.text('Открыть файл на устройстве'));
+    await tester.pump();
     await pumpFor(tester, find.text('Sample Project'));
     expect(find.text('Sample Project'), findsOneWidget);
     expect(find.textContaining('2026-10-31'), findsOneWidget);

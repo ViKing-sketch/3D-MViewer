@@ -18,6 +18,9 @@ app/linux/flutter/ephemeral/
 app/windows/flutter/ephemeral/
 app/**/GeneratedPluginRegistrant.*
 
+# QR page written by tools/lan_sync_server.bat. It contains a test token.
+sync-link.html
+
 # Local packages produced while developing
 *.fbvpkg.log
 /tmp_pkg/

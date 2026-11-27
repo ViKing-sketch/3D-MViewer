@@ -26,3 +26,4 @@ Linux, Windows, тесты и отладочный APK — [docs/build.md](docs/
 - [Техническое задание v0.2](docs/TZ_Field_BIM_Viewer_v0_2.md)
 - [Формат пакета](docs/package_format.md)
 - [Сборка](docs/build.md)
+- [Проверка сервера по Wi-Fi](docs/server_connect_test.md)

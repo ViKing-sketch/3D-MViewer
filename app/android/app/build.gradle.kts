@@ -18,6 +18,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // CameraX uses java.time. minSdk is below 34, so desugar it.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -74,6 +76,13 @@ dependencies {
     implementation("com.google.android.filament:filament-android:$filament")
     implementation("com.google.android.filament:filament-utils-android:$filament")
     implementation("com.google.android.filament:gltfio-android:$filament")
+    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.zxing:core:3.5.3")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     testImplementation("junit:junit:4.13.2")
 }
 

@@ -164,6 +164,7 @@ class ImportBridge(
 
     private fun uriOf(intent: Intent?): Uri? {
         if (intent == null) return null
+        if (intent.data?.scheme == "fbv") return null
         return when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> streamUri(intent)

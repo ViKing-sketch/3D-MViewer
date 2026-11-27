@@ -203,6 +203,57 @@ class S {
       russian ? 'Путь к фото, если есть' : 'Path to a photo, if any';
   String get addRemark => russian ? 'Добавить замечание' : 'Add remark';
   String get showViewpoint => russian ? 'Показать ракурс' : 'Show view';
+  String get setupTitle => russian ? 'С чего начать' : 'How to start';
+  String get setupOnce => russian
+      ? 'Это делается один раз. Дальше приложение само открывает модели.'
+      : 'This is done once. After that the app opens models by itself.';
+  String get setupLocal =>
+      russian ? 'Открыть файл на устройстве' : 'Open a file on this device';
+  String get setupServer => russian
+      ? 'Подключиться к серверу организации'
+      : 'Connect to the organisation server';
+  String get connectTitle =>
+      russian ? 'Сервер организации' : 'Organisation server';
+  String get connectHint => russian
+      ? 'Администратор выдаёт QR-код или ссылку. Адрес вручную вводить не нужно.'
+      : 'An administrator gives a QR code or a link. The address does not need to be typed.';
+  String get scanQr => russian ? 'Сканировать QR-код' : 'Scan QR code';
+  String get connectAdvanced => russian ? 'Дополнительно' : 'Advanced';
+  String get connectAddress => russian ? 'Адрес' : 'Address';
+  String get connectToken => russian ? 'Токен доступа' : 'Access token';
+  String get connectApply => russian ? 'Подключить' : 'Connect';
+  String get connectInvalid => russian
+      ? 'Ссылка не подошла. Попросите новый QR-код.'
+      : 'This link is not valid. Ask for a new QR code.';
+  String get connectNeedFolder => russian
+      ? 'Сначала выберите каталог, куда сохранить модели.'
+      : 'Choose a folder for the models first.';
+  String get cameraPhoneOnly => russian
+      ? 'Камера для QR-кода есть на телефоне. Здесь вставьте ссылку в «Дополнительно».'
+      : 'The QR camera is on the phone. Paste the link under Advanced.';
+  String get tokenStoreFailed => russian
+      ? 'Не удалось сохранить доступ. Отсканируйте QR-код ещё раз.'
+      : 'The access token could not be saved. Scan the QR code again.';
+  String get settingsTitle => russian ? 'Настройки' : 'Settings';
+  String get settingsServer => russian ? 'Сервер' : 'Server';
+  String get serverCheck =>
+      russian ? 'Проверить соединение' : 'Check connection';
+  String get serverChange => russian ? 'Сменить сервер' : 'Change server';
+  String get serverForget => russian ? 'Забыть сервер' : 'Forget server';
+  String get serverForgetConfirm => russian
+      ? 'Забыть сервер организации на этом устройстве?'
+      : 'Forget the organisation server on this device?';
+  String get serverNone => russian ? 'Сервер не задан' : 'No server saved';
+  String get serverReachable =>
+      russian ? 'Связь с сервером есть' : 'The server responded';
+  String get syncRetry => russian ? 'Повторить' : 'Retry';
+  String get syncRescan => russian ? 'Отсканировать ещё раз' : 'Scan again';
+  String get syncUnavailable => russian
+      ? 'Сервер организации недоступен, показываю сохранённые модели'
+      : 'The organisation server is unreachable. Showing saved models.';
+  String get syncRevoked => russian
+      ? 'Доступ к серверу организации истёк или отозван. Отсканируйте QR-код ещё раз.'
+      : 'Access to the organisation server expired or was revoked. Scan the QR code again.';
   String get syncUrl => russian
       ? 'Адрес сервера организации или соседа в сети'
       : 'Organisation server or LAN peer';
