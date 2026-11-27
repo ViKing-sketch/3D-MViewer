@@ -379,11 +379,16 @@ END-ISO-10303-21;
   prism_options.output = (root / "prism").string();
   prism_options.as_directory = true;
   prism_options.source_name = "prism.ifc";
+  std::vector<std::pair<int, int>> prism_progress;
+  prism_options.progress = [&](int done, int total) { prism_progress.emplace_back(done, total); };
   const auto prism_status = fbv::convert_text(prism, prism_options);
   if (prism_status.code != 0) std::cerr << prism_status.error << "\n";
   CHECK(prism_status.code == 0);
   CHECK(prism_status.elements == 1);
   CHECK(prism_status.with_mesh == 1);
+  CHECK(prism_progress.size() == 2);
+  CHECK(prism_progress[0].first == 1 && prism_progress[0].second == 2);
+  CHECK(prism_progress[1].first == 2 && prism_progress[1].second == 2);
   fbv::GlbContents prism_glb;
   std::string prism_error;
   CHECK(fbv::read_glb(std::filesystem::path(prism_options.output) / "mesh" / "elements" / "1.glb",

@@ -39,6 +39,7 @@ void main() {
     );
     expect(parseStageProgress('FBV_PROGRESS 1 2')!.fraction, 0.5);
     expect(parseStageProgress('FBV_PROGRESS 2 2')!.done, 2);
+    expect(parseStageProgress('FBV_PROGRESS 3 4')!.fraction, 0.75);
     expect(parseStageProgress('note: hello'), isNull);
   });
 

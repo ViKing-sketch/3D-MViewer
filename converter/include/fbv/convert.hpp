@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,9 @@ struct ConvertOptions {
   bool stats = false;
   std::string json_output;
   std::string input_path;
+  // done/total while elements are meshed, then one last step when the package
+  // is written. Total is element count + 1. Empty means print FBV_PROGRESS.
+  std::function<void(int done, int total)> progress;
 };
 
 struct ConvertStatus {

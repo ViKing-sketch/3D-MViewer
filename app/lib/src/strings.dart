@@ -187,6 +187,13 @@ class S {
       : 'No IFC or packages in this folder';
   String get converterLog => russian ? 'Журнал' : 'Log';
   String get converterRunning => russian ? 'Идёт конвертация' : 'Converting';
+  String converterPercent(int done, int total) {
+    final percent = total <= 0 ? 0 : (100 * done / total).round().clamp(0, 100);
+    return russian
+        ? 'Идёт конвертация, $percent% ($done из $total)'
+        : 'Converting, $percent% ($done of $total)';
+  }
+
   String get converterIdle => russian ? 'Не запускалась' : 'Not run';
   String converterDone(int code) => russian
       ? (code == 0 ? 'Готово, код 0' : 'Ошибка, код $code')
