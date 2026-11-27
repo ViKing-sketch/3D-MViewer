@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import 'appearance.dart';
 import 'csv_export.dart';
@@ -18,6 +19,7 @@ import 'package_session.dart';
 import 'remarks.dart';
 import 'remarks_section.dart';
 import 'strings.dart';
+import 'tile_load.dart';
 import 'visibility.dart';
 import 'walk_pose.dart';
 import 'walk_stick.dart';
@@ -41,6 +43,9 @@ class _ModelPageState extends State<ModelPage>
   List<SpatialNode> _spatial = const [];
   List<SystemInfo> _systems = const [];
   List<ElementInfo> _elements = const [];
+  List<TileInfo> _tiles = const [];
+  Map<int, int> _meshBytes = const {};
+  String? _discipline;
   List<ElementBox> _boxes = const [];
   List<SpecRow> _specs = const [];
   String? _error;
@@ -96,6 +101,7 @@ class _ModelPageState extends State<ModelPage>
       _spatial = session.spatial();
       _systems = session.systems();
       _elements = session.elements();
+      _takeTiles(session);
       _boxes = session.elementBoxes();
       _specs = session.specifications();
       _remarks = RemarkStore(widget.path)..load();
@@ -137,6 +143,7 @@ class _ModelPageState extends State<ModelPage>
         _spatial = session.spatial();
         _systems = session.systems();
         _elements = session.elements();
+        _takeTiles(session);
         _boxes = session.elementBoxes();
         _specs = session.specifications();
         _remarks = RemarkStore(widget.path)..load();
@@ -250,8 +257,50 @@ class _ModelPageState extends State<ModelPage>
     return false;
   }
 
+  void _takeTiles(PackageSession session) {
+    _tiles = session.tiles();
+    final bytes = <int, int>{};
+    for (final tile in _tiles) {
+      for (final id in tile.elementIds) {
+        if (bytes.containsKey(id)) continue;
+        final file = File(
+          p.join(session.rootPath, 'mesh', 'elements', '$id.glb'),
+        );
+        bytes[id] = file.existsSync() ? file.lengthSync() : 0;
+      }
+    }
+    _meshBytes = bytes;
+  }
+
+  TileScene? _scene() {
+    return sceneTiles(
+      tiles: _tiles,
+      storeyId: _filter.storeyId,
+      discipline: _discipline,
+      elementBytes: _meshBytes,
+    );
+  }
+
+  /// An element outside the single open tile moves the scene to its tile.
+  void _retargetTile(int id) {
+    final owner = tileOf(_tiles, id);
+    if (owner == null) return;
+    final scene = _scene();
+    if (scene != null &&
+        scene.tiles.length == 1 &&
+        scene.tiles.single.tileId == owner.id) {
+      return;
+    }
+    _discipline = owner.discipline;
+    _filter = owner.storeyId == null
+        ? _filter.copyWith(clearStorey: true)
+        : _filter.copyWith(storeyId: owner.storeyId);
+    _fitToken++;
+  }
+
   void _choose(int? id) {
     setState(() {
+      if (id != null) _retargetTile(id);
       _selectedId = id;
       if (id == null) {
         _xray = false;
@@ -269,6 +318,7 @@ class _ModelPageState extends State<ModelPage>
 
   void _jumpTo(int id) {
     setState(() {
+      _retargetTile(id);
       _selectedId = id;
       _xray = true;
       _walking = false;
@@ -300,6 +350,7 @@ class _ModelPageState extends State<ModelPage>
       _hidden.clear();
       _isolated.clear();
       _filter = const SceneFilter();
+      _discipline = null;
       _query = '';
       _searchIds = null;
       _xray = false;
@@ -310,9 +361,14 @@ class _ModelPageState extends State<ModelPage>
     });
   }
 
-  void _applyFilter(SceneFilter next, {VoidCallback? refresh}) {
-    if (next == _filter) return;
+  void _applyFilter(
+    SceneFilter next, {
+    VoidCallback? refresh,
+    bool clearDiscipline = false,
+  }) {
+    if (next == _filter && !clearDiscipline) return;
     setState(() {
+      if (clearDiscipline) _discipline = null;
       _filter = next;
       final kept = isolateWithin(_isolated, _elements, next);
       final hits = _searchIds;
@@ -1201,9 +1257,55 @@ class _ModelPageState extends State<ModelPage>
     final storeys = storeysOf(_spatial);
     final classes = {..._elements.map((e) => e.ifcClass)}.toList()..sort();
     final materials = materialsOf(_elements);
+    final scene = _scene();
+    final disciplines = tileDisciplines(
+      tiles: _tiles,
+      storeyId: _filter.storeyId,
+    );
+    final one = scene != null && scene.tiles.length == 1
+        ? scene.tiles.single
+        : null;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (disciplines.isNotEmpty)
+          _chipStrip([
+            if (_filter.storeyId == null)
+              _filterChip(
+                key: const ValueKey('discipline-all'),
+                label: strings.allDisciplines,
+                selected: _discipline == null,
+                onSelected: () {
+                  setState(() {
+                    _discipline = null;
+                    _fitToken++;
+                  });
+                  refresh?.call();
+                },
+              ),
+            for (final name in disciplines)
+              _filterChip(
+                key: ValueKey(
+                  name.isEmpty ? 'discipline-none' : 'discipline-$name',
+                ),
+                label: strings.disciplineLabel(name),
+                selected: _filter.storeyId == null
+                    ? _discipline == name
+                    : one?.discipline == name,
+                onSelected: () {
+                  setState(() {
+                    _discipline = name;
+                    _fitToken++;
+                  });
+                  refresh?.call();
+                },
+              ),
+          ]),
+        if (scene != null && scene.partial)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Text(strings.tilesOmitted(scene.omitted)),
+          ),
         if (storeys.isNotEmpty)
           _chipStrip([
             _filterChip(
@@ -1213,6 +1315,7 @@ class _ModelPageState extends State<ModelPage>
               onSelected: () => _applyFilter(
                 _filter.copyWith(clearStorey: true),
                 refresh: refresh,
+                clearDiscipline: true,
               ),
             ),
             for (final storey in storeys)
@@ -1603,10 +1706,15 @@ class _ModelPageState extends State<ModelPage>
   }
 
   Widget _viewportOf(ElementInfo? selected) {
+    final scene = _scene();
     return FilamentViewport(
       key: _viewport,
       strings: widget.strings,
       rootPath: _session?.rootPath,
+      tileKey: scene == null
+          ? ''
+          : scene.tiles.map((tile) => tile.tileId).join('-'),
+      tileElements: scene?.elementIds,
       elementCount: _elements.length,
       selectedName: selected?.name,
       selectedId: _selectedId,

@@ -49,6 +49,42 @@ class S {
       : 'Offline. This app does not use the network.';
   String get allClasses => russian ? 'Все классы' : 'All classes';
   String get allStoreys => russian ? 'Все этажи' : 'All storeys';
+  String get allDisciplines => russian ? 'Все разделы' : 'All disciplines';
+  String tilesOmitted(int count) => russian
+      ? 'В сцену вошли не все этажи: ещё $count не влезли в память. Выберите этаж.'
+      : 'Not every storey fits in memory ($count left out). Choose a storey.';
+
+  /// Discipline keys written into a tile. An empty key is the bucket with none.
+  String disciplineLabel(String key) {
+    final ru = switch (key) {
+      'ventilation' => 'Вентиляция',
+      'heating' => 'Отопление',
+      'electrical' => 'Электрика',
+      'plumbing' => 'Водопровод',
+      'fire' => 'Пожар',
+      'architecture' => 'Архитектура',
+      'structure' => 'Конструкции',
+      'equipment' => 'Оборудование',
+      '' => 'Без дисциплины',
+      _ => key,
+    };
+    if (!russian) {
+      return switch (key) {
+        'ventilation' => 'Ventilation',
+        'heating' => 'Heating',
+        'electrical' => 'Electrical',
+        'plumbing' => 'Plumbing',
+        'fire' => 'Fire',
+        'architecture' => 'Architecture',
+        'structure' => 'Structure',
+        'equipment' => 'Equipment',
+        '' => 'No discipline',
+        _ => key,
+      };
+    }
+    return ru;
+  }
+
   String get allMaterials => russian ? 'Все материалы' : 'All materials';
   String get allSystems => russian ? 'Все системы' : 'All systems';
   String get noMaterial => russian ? 'Без материала' : 'No material';

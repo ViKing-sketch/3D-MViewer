@@ -16,6 +16,8 @@ import 'walk_stick.dart';
 /// Channel and view type are `fbv/filament`, as described in docs/rendering.md.
 /// The native view loads `mesh/lod0.glb` and any `mesh/elements/<id>.glb` that
 /// is not already in that scene, and maps picks through `extras.elementId`.
+/// A package with storey × discipline tiles sends one tile's element ids
+/// instead, and lod0 stays on disk.
 class FilamentViewport extends StatefulWidget {
   const FilamentViewport({
     super.key,
@@ -23,6 +25,8 @@ class FilamentViewport extends StatefulWidget {
     required this.elementCount,
     required this.selectedName,
     this.rootPath,
+    this.tileKey = '',
+    this.tileElements,
     this.selectedId,
     this.hiddenIds = const {},
     this.isolatedIds = const {},
@@ -43,6 +47,12 @@ class FilamentViewport extends StatefulWidget {
   final int elementCount;
   final String? selectedName;
   final String? rootPath;
+
+  /// Empty loads the whole model. Any other value is one tile.
+  final String tileKey;
+
+  /// Element ids of [tileKey]. Null when [tileKey] is empty.
+  final List<int>? tileElements;
   final int? selectedId;
   final Set<int> hiddenIds;
   final Set<int> isolatedIds;
@@ -137,8 +147,10 @@ class FilamentViewportState extends State<FilamentViewport> {
     }
     if (oldWidget.section != widget.section) _pushSection();
     if (oldWidget.walk != widget.walk) _pushWalk();
-    if (oldWidget.rootPath != widget.rootPath && widget.rootPath != null) {
-      _commands?.load(widget.rootPath!);
+    if (widget.rootPath != null &&
+        (oldWidget.rootPath != widget.rootPath ||
+            oldWidget.tileKey != widget.tileKey)) {
+      _commands?.load(widget.rootPath!, elements: widget.tileElements);
     }
   }
 
@@ -178,7 +190,9 @@ class FilamentViewportState extends State<FilamentViewport> {
     // load so the first frame is not inset=0, and again from didUpdateWidget
     // if layout measures a different collapsed height.
     await commands.setFitInset(widget.bottomInset);
-    if (widget.rootPath != null) await commands.load(widget.rootPath!);
+    if (widget.rootPath != null) {
+      await commands.load(widget.rootPath!, elements: widget.tileElements);
+    }
     await _pushState();
     await _pushSection();
     await _pushWalk();
